@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Contractor Manhour Tracker (Online)</title>
+    <title>Contractor Manhour Tracker (Supabase)</title>
     
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -14,16 +14,16 @@
     <!-- Babel for JSX -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
+    <!-- Supabase JS -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
     <!-- Import Map -->
     <script type="importmap">
     {
       "imports": {
         "react": "https://esm.sh/react@18.2.0",
         "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
-        "lucide-react": "https://esm.sh/lucide-react@0.263.1",
-        "firebase/app": "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
-        "firebase/auth": "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js",
-        "firebase/firestore": "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js"
+        "lucide-react": "https://esm.sh/lucide-react@0.263.1"
       }
     }
     </script>
@@ -39,6 +39,53 @@
 <body class="bg-slate-50 text-slate-900 overflow-hidden">
     <div id="root"></div>
 
+    <!-- 
+    🚨 คำแนะนำสำหรับการสร้างตารางใน Supabase (SQL Editor) 🚨
+    
+    ให้ copy โค้ด SQL ด้านล่างนี้ไปวางใน SQL Editor ของ Supabase แล้วกด Run เพื่อสร้างตาราง:
+
+    create table projects (
+      id uuid default uuid_generate_v4() primary key,
+      created_at timestamp with time zone default timezone('utc'::text, now()) not null,
+      name text not null,
+      "group" text
+    );
+
+    create table work_logs (
+      id uuid default uuid_generate_v4() primary key,
+      updated_at timestamp with time zone default timezone('utc'::text, now()) not null,
+      project_id uuid references projects(id) on delete cascade,
+      year text not null,
+      month text not null,
+      type text not null,
+      male numeric default 0,
+      female numeric default 0,
+      hours numeric default 0
+    );
+
+    create table incidents (
+      id uuid default uuid_generate_v4() primary key,
+      created_at timestamp with time zone default timezone('utc'::text, now()) not null,
+      project_id uuid references projects(id) on delete cascade,
+      date text not null,
+      "desc" text,
+      image text,
+      injured_male numeric default 0,
+      injured_female numeric default 0,
+      lost_days numeric default 0
+    );
+
+    -- (Optional) เปิดให้ใครก็ได้อ่านเขียนได้ (สำหรับทดสอบเท่านั้น) --
+    alter table projects enable row level security;
+    create policy "Public Access Projects" on projects for all using (true);
+    
+    alter table work_logs enable row level security;
+    create policy "Public Access Logs" on work_logs for all using (true);
+
+    alter table incidents enable row level security;
+    create policy "Public Access Incidents" on incidents for all using (true);
+    -->
+
     <script type="text/babel" data-type="module">
         import React, { useState, useEffect, useMemo, useRef } from 'react';
         import { createRoot } from 'react-dom/client';
@@ -47,48 +94,29 @@
             Calendar, ChevronRight, Users, Clock, Trash2, Edit2, 
             Download, Image as ImageIcon, X, FileSpreadsheet, 
             RefreshCw, Search, CheckCircle2, MoreVertical, Share2, Menu,
-            Activity, AlertCircle, Filter, ChevronDown, WifiOff, Settings, Database, CalendarRange
+            Activity, AlertCircle, Filter, ChevronDown, WifiOff, Settings, Database, CalendarRange, Flame
         } from 'lucide-react';
-        import { initializeApp } from 'firebase/app';
-        import { 
-            getFirestore, collection, doc, setDoc, onSnapshot, 
-            query, addDoc, deleteDoc, updateDoc 
-        } from 'firebase/firestore';
-        import { 
-            getAuth, signInAnonymously, onAuthStateChanged, 
-            signInWithCustomToken 
-        } from 'firebase/auth';
 
-        // --- 🔴 จุดที่ต้องแก้ไข (สำคัญมาก) ---
-        const manualConfig = {
-            apiKey: "AIzaSyAe0JQkYFKjuHcdb9fmkjtO5kv76qO2oJo", 
-            authDomain: "manhour-tracker-2026.firebaseapp.com",
-            projectId: "manhour-tracker-2026",
-            storageBucket: "manhour-tracker-2026.firebasestorage.app",
-            messagingSenderId: "G-KB7YJJ1LRH",
-            appId: "1:855707142056:web:48c076cbacfdb5a280ff9d"
-        };
+        // --- 🟢 SUPABASE CONFIGURATION ---
+        // ใส่ URL และ Anon Key ของคุณที่นี่
+        const SUPABASE_URL = "https://ifgeypqdbpfeucyabmsq.supabase.co";
+        const SUPABASE_KEY = "sb_publishable_bdd3ZUjgL1iib8mDKp6T3Q_m1Ybc6ct";
 
-        const firebaseConfig = typeof __firebase_config !== 'undefined' 
-            ? JSON.parse(__firebase_config) 
-            : manualConfig;
-            
-        let app, auth, db;
+        let supabase = null;
         try {
-            app = initializeApp(firebaseConfig);
-            auth = getAuth(app);
-            db = getFirestore(app);
+            if (SUPABASE_URL !== "https://ifgeypqdbpfeucyabmsq.supabase.co") {
+                supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+            }
         } catch (e) {
-            console.error("Firebase Init Error:", e);
+            console.error("Supabase Init Error", e);
         }
-        
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'contractor-manhour-system-v2';
+
         const MONTHS = ['October', 'November', 'December', 'January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September'];
         const CONTRACTOR_TYPES = ['Type A', 'Type B', 'Type C'];
-        const YEARS = ['FY2024', 'FY2025', 'FY2026', 'FY2027', 'FY2028']; // รายชื่อปีงบประมาณ
+        const YEARS = ['FY2024', 'FY2025', 'FY2026', 'FY2027', 'FY2028'];
 
         function App() {
-            const [user, setUser] = useState(null);
+            const [user, setUser] = useState(null); // Simple user state
             const [activeTab, setActiveTab] = useState('dashboard');
             
             // Data States
@@ -97,62 +125,70 @@
             const [incidents, setIncidents] = useState([]);
             
             const [selectedProject, setSelectedProject] = useState(null);
-            const [loading, setLoading] = useState(true);
+            const [loading, setLoading] = useState(false);
             const [notification, setNotification] = useState(null);
             const [isSidebarOpen, setIsSidebarOpen] = useState(false);
             const [groupFilter, setGroupFilter] = useState('All');
-            const [selectedYear, setSelectedYear] = useState('FY2026'); // Default Year
-            const [connectionStatus, setConnectionStatus] = useState('connecting');
+            const [selectedYear, setSelectedYear] = useState('FY2026');
+            const [connectionStatus, setConnectionStatus] = useState('checking'); // checking, connected, error, unconfigured
 
-            // --- Authentication ---
+            // --- 1. Check Configuration & Auth ---
             useEffect(() => {
-                const initAuth = async () => {
-                    try {
-                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                            await signInWithCustomToken(auth, __initial_auth_token);
-                        } else {
-                            await signInAnonymously(auth);
-                        }
-                    } catch (error) {
-                        console.error("Auth Error:", error);
-                        setConnectionStatus('error');
-                    }
-                };
-                if (auth) {
-                    initAuth();
-                    const unsubscribe = onAuthStateChanged(auth, (u) => {
-                        if (u) { setUser(u); setConnectionStatus('connected'); }
-                    });
-                    return () => unsubscribe();
-                } else {
-                    setConnectionStatus('error');
+                if (!supabase) {
+                    setConnectionStatus('unconfigured');
+                    return;
                 }
+                
+                const checkConnection = async () => {
+                    setLoading(true);
+                    // Try a simple fetch to check connection
+                    const { count, error } = await supabase.from('projects').select('*', { count: 'exact', head: true });
+                    if (error) {
+                        console.error("Connection Check Failed:", error);
+                        setConnectionStatus('error');
+                    } else {
+                        setConnectionStatus('connected');
+                        fetchData();
+                    }
+                    setLoading(false);
+                    setUser({ id: 'anon-user' }); // Mock user for UI
+                };
+
+                checkConnection();
             }, []);
 
-            // --- Data Listeners ---
-            useEffect(() => {
-                if (!user || !db) return;
-                try {
-                    const projectsRef = collection(db, 'artifacts', appId, 'public', 'data', 'projects');
-                    const unsubProjects = onSnapshot(projectsRef, (snapshot) => {
-                        const pData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                        pData.sort((a, b) => a.name.localeCompare(b.name, undefined, {numeric: true, sensitivity: 'base'}));
-                        setProjects(pData);
-                        setLoading(false);
-                    }, (err) => { console.error("Data Error:", err); setConnectionStatus('error'); });
+            // --- 2. Data Fetching (Manual Refresh Style for Simplicity) ---
+            const fetchData = async () => {
+                if (!supabase) return;
+                
+                // Fetch Projects
+                const { data: pData } = await supabase.from('projects').select('*').order('created_at', { ascending: false });
+                if (pData) setProjects(pData);
 
-                    const logsRef = collection(db, 'artifacts', appId, 'public', 'data', 'workLogs');
-                    const unsubLogs = onSnapshot(logsRef, (snapshot) => setLogs(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))));
-
-                    const incidentsRef = collection(db, 'artifacts', appId, 'public', 'data', 'incidents');
-                    const unsubIncidents = onSnapshot(incidentsRef, (snapshot) => setIncidents(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))));
-
-                    return () => { unsubProjects(); unsubLogs(); unsubIncidents(); };
-                } catch (err) {
-                    console.error("DB Init Error", err);
-                    setConnectionStatus('error');
+                // Fetch Logs (Wait for Project IDs ideally, but fetching all for now for dashboard)
+                const { data: lData } = await supabase.from('work_logs').select('*');
+                if (lData) {
+                    // Normalize fields (postgres returns snake_case usually, but we keep simple names)
+                    const normalizedLogs = lData.map(l => ({
+                        ...l,
+                        projectId: l.project_id // Map DB column project_id to internal projectId
+                    }));
+                    setLogs(normalizedLogs);
                 }
-            }, [user]);
+
+                // Fetch Incidents
+                const { data: iData } = await supabase.from('incidents').select('*');
+                if (iData) {
+                    const normalizedIncidents = iData.map(i => ({
+                        ...i,
+                        projectId: i.project_id,
+                        injuredMale: Number(i.injured_male),
+                        injuredFemale: Number(i.injured_female),
+                        lostDays: Number(i.lost_days)
+                    }));
+                    setIncidents(normalizedIncidents);
+                }
+            };
 
             // --- Deep Linking ---
             useEffect(() => {
@@ -182,10 +218,9 @@
                 if (groupFilter !== 'All') filteredProjects = projects.filter(p => p.group === groupFilter);
                 const projectIds = new Set(filteredProjects.map(p => p.id));
                 
-                // Filter logs by YEAR as well
-                const filteredLogs = logs.filter(l => projectIds.has(l.projectId) && (l.year === selectedYear || (!l.year && selectedYear === 'FY2026'))); // Backward compatibility for existing data
-                
+                const filteredLogs = logs.filter(l => projectIds.has(l.projectId) && (l.year === selectedYear));
                 const filteredIncidents = incidents.filter(i => projectIds.has(i.projectId));
+                
                 return { projects: filteredProjects, logs: filteredLogs, incidents: filteredIncidents };
             }, [projects, logs, incidents, groupFilter, selectedYear]);
 
@@ -207,7 +242,153 @@
                 return summary;
             }, [filteredData]);
 
-            // --- Export ---
+            // --- Actions (Supabase CRUD) ---
+            const addProject = async (name, group) => { 
+                if (!name || !supabase) return; 
+                try {
+                    const { data, error } = await supabase.from('projects').insert([{ name, group }]).select();
+                    if (error) throw error;
+                    setProjects(prev => [data[0], ...prev]);
+                    showNotification("Project added");
+                } catch(e) {
+                    console.error(e);
+                    showNotification("Error adding project");
+                }
+            };
+            
+            const updateProject = async (id, newData) => { 
+                if (!supabase) return;
+                try {
+                    const { error } = await supabase.from('projects').update({ name: newData.name, group: newData.group }).eq('id', id);
+                    if (error) throw error;
+                    
+                    setProjects(prev => prev.map(p => p.id === id ? { ...p, ...newData } : p));
+                    if (selectedProject?.id === id) setSelectedProject(prev => ({ ...prev, ...newData }));
+                    showNotification("Project updated");
+                } catch(e) {
+                    console.error(e);
+                    showNotification("Error updating");
+                }
+            };
+            
+            const deleteProject = async (id) => { 
+                if (!supabase) return;
+                if(!confirm("Delete project and all its data?")) return;
+                try {
+                    const { error } = await supabase.from('projects').delete().eq('id', id);
+                    if (error) throw error;
+                    
+                    setProjects(prev => prev.filter(p => p.id !== id));
+                    if (selectedProject?.id === id) { setSelectedProject(null); } 
+                    showNotification("Project deleted"); 
+                } catch(e) {
+                    showNotification("Error deleting");
+                }
+            };
+            
+            const saveLog = async (d) => { 
+                if (!supabase) return;
+                
+                try {
+                    // Check if exists first (Supabase UPSERT requires constraint)
+                    // For simplicity, we'll try to select first
+                    const { data: existing } = await supabase.from('work_logs')
+                        .select('id')
+                        .eq('project_id', d.projectId)
+                        .eq('year', selectedYear)
+                        .eq('month', d.month)
+                        .eq('type', d.type)
+                        .single();
+
+                    let error;
+                    const payload = {
+                        project_id: d.projectId,
+                        year: selectedYear,
+                        month: d.month,
+                        type: d.type,
+                        male: d.male,
+                        female: d.female,
+                        hours: d.hours,
+                        updated_at: new Date().toISOString()
+                    };
+
+                    if (existing) {
+                        const res = await supabase.from('work_logs').update(payload).eq('id', existing.id).select();
+                        error = res.error;
+                        // Update local state
+                        setLogs(prev => prev.map(l => l.id === existing.id ? { ...l, ...payload, projectId: d.projectId } : l));
+                    } else {
+                        const res = await supabase.from('work_logs').insert([payload]).select();
+                        error = res.error;
+                        if (res.data) setLogs(prev => [...prev, { ...res.data[0], projectId: d.projectId }]);
+                    }
+
+                    if (error) throw error;
+                    showNotification("Saved"); 
+                } catch(e) {
+                    console.error(e);
+                    showNotification("Error saving log");
+                }
+            };
+            
+            const addIncident = async (pid, incidentData) => { 
+                if (!supabase) return;
+                try {
+                    const payload = {
+                        project_id: pid,
+                        date: incidentData.date,
+                        "desc": incidentData.desc,
+                        image: incidentData.image, 
+                        injured_male: incidentData.injuredMale,
+                        injured_female: incidentData.injuredFemale,
+                        lost_days: incidentData.lostDays
+                    };
+                    const { data, error } = await supabase.from('incidents').insert([payload]).select();
+                    if (error) throw error;
+                    
+                    const newInc = { ...data[0], projectId: pid, injuredMale: payload.injured_male, injuredFemale: payload.injured_female, lostDays: payload.lost_days };
+                    setIncidents(prev => [newInc, ...prev]);
+                    showNotification("Incident recorded"); 
+                } catch(e) {
+                    console.error(e);
+                    showNotification("Error adding incident");
+                }
+            };
+            
+            const updateIncident = async (id, d) => { 
+                if (!supabase) return;
+                try {
+                     const payload = {
+                        date: d.date,
+                        "desc": d.desc,
+                        image: d.image,
+                        injured_male: d.injuredMale,
+                        injured_female: d.injuredFemale,
+                        lost_days: d.lostDays
+                    };
+                    const { error } = await supabase.from('incidents').update(payload).eq('id', id);
+                    if (error) throw error;
+                    
+                    setIncidents(prev => prev.map(i => i.id === id ? { ...i, ...payload, injuredMale: payload.injured_male, injuredFemale: payload.injured_female, lostDays: payload.lost_days } : i));
+                    showNotification("Incident updated"); 
+                } catch(e) {
+                    showNotification("Error updating");
+                }
+            };
+            
+            const deleteIncident = async (id) => { 
+                if (!supabase) return;
+                if(!confirm("Delete?")) return; 
+                try {
+                    const { error } = await supabase.from('incidents').delete().eq('id', id);
+                    if (error) throw error;
+                    setIncidents(prev => prev.filter(i => i.id !== id));
+                    showNotification("Deleted"); 
+                } catch(e) {
+                    showNotification("Error deleting");
+                }
+            };
+
             const exportToExcel = () => {
                 const { projects: fProjects, logs: fLogs, incidents: fIncidents } = filteredData;
                 let xmlContent = `<?xml version="1.0"?><?mso-application progid="Excel.Sheet"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet" xmlns:html="http://www.w3.org/TR/REC-html40"><Styles><Style ss:ID="Default" ss:Name="Normal"><Alignment ss:Vertical="Bottom"/><Borders/><Font ss:FontName="Calibri" x:Family="Swiss" ss:Size="11" ss:Color="#000000"/><Interior/><NumberFormat/><Protection/></Style><Style ss:ID="Header"><Font ss:FontName="Calibri" x:Family="Swiss" ss:Size="11" ss:Color="#FFFFFF" ss:Bold="1"/><Interior ss:Color="#2563EB" ss:Pattern="Solid"/></Style></Styles>`;
@@ -223,7 +404,7 @@
                 xmlContent += '</Row>';
                 fIncidents.sort((a,b) => new Date(b.date)-new Date(a.date)).forEach(inc => {
                     const p = fProjects.find(p => p.id === inc.projectId);
-                    xmlContent += `<Row><Cell><Data ss:Type="String">${inc.date}</Data></Cell><Cell><Data ss:Type="String">${p ? p.name : 'Unknown'}</Data></Cell><Cell><Data ss:Type="String">${inc.desc || ''}</Data></Cell><Cell><Data ss:Type="Number">${inc.injuredMale || 0}</Data></Cell><Cell><Data ss:Type="Number">${inc.injuredFemale || 0}</Data></Cell><Cell><Data ss:Type="Number">${inc.lostDays || 0}</Data></Cell><Cell><Data ss:Type="String">${new Date(inc.createdAt).toLocaleString('en-GB')}</Data></Cell></Row>`;
+                    xmlContent += `<Row><Cell><Data ss:Type="String">${inc.date}</Data></Cell><Cell><Data ss:Type="String">${p ? p.name : 'Unknown'}</Data></Cell><Cell><Data ss:Type="String">${inc.desc || ''}</Data></Cell><Cell><Data ss:Type="Number">${inc.injuredMale || 0}</Data></Cell><Cell><Data ss:Type="Number">${inc.injuredFemale || 0}</Data></Cell><Cell><Data ss:Type="Number">${inc.lostDays || 0}</Data></Cell><Cell><Data ss:Type="String">${new Date(inc.created_at || Date.now()).toLocaleString('en-GB')}</Data></Cell></Row>`;
                 });
                 xmlContent += '</Table></Worksheet></Workbook>';
                 const blob = new Blob([xmlContent], { type: 'application/vnd.ms-excel' });
@@ -231,21 +412,29 @@
                 const link = document.createElement("a"); link.href = url; link.download = `Manhour_Report_${groupFilter}_${selectedYear}.xls`; document.body.appendChild(link); link.click(); document.body.removeChild(link);
             };
 
-            // CRUD Actions
-            const addProject = async (name, group) => { if (!name) return; await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'projects'), { name, group, createdAt: Date.now() }); showNotification("Project added"); };
-            const updateProject = async (id, newData) => { const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'projects', id); await updateDoc(docRef, { ...newData, updatedAt: Date.now() }); if (selectedProject?.id === id) setSelectedProject(prev => ({ ...prev, ...newData })); showNotification("Project updated"); };
-            const deleteProject = async (id) => { if(!confirm("Delete project?")) return; await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'projects', id)); if (selectedProject?.id === id) { setSelectedProject(null); } showNotification("Project deleted"); };
-            
-            // Updated saveLog to include YEAR
-            const saveLog = async (d) => { 
-                const id = `${d.projectId}_${selectedYear}_${d.month}_${d.type}`; 
-                await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'workLogs', id), { ...d, year: selectedYear, updatedAt: Date.now() }, { merge: true }); 
-                showNotification("Saved"); 
-            };
-            
-            const addIncident = async (pid, incidentData) => { await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'incidents'), { projectId: pid, ...incidentData, createdAt: Date.now() }); showNotification("Incident recorded"); };
-            const updateIncident = async (id, d) => { const ref = doc(db, 'artifacts', appId, 'public', 'data', 'incidents', id); await updateDoc(ref, { ...d, updatedAt: Date.now() }); showNotification("Incident updated"); };
-            const deleteIncident = async (id) => { if(!confirm("Delete?")) return; await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'incidents', id)); showNotification("Deleted"); };
+            if (connectionStatus === 'unconfigured') {
+                return (
+                     <div className="flex h-screen items-center justify-center bg-slate-50 p-6">
+                        <div className="bg-white p-8 rounded-2xl shadow-xl max-w-lg w-full text-center border border-blue-100">
+                            <div className="w-16 h-16 bg-blue-100 text-blue-500 rounded-full flex items-center justify-center mx-auto mb-4"><Database size={32}/></div>
+                            <h2 className="text-xl font-bold text-slate-800 mb-2">Setup Supabase</h2>
+                            <p className="text-slate-500 text-sm mb-6 text-left">
+                                To use this app with Supabase, you need to:
+                                <br/><br/>
+                                1. Open this file in a code editor.<br/>
+                                2. Find <code>SUPABASE_URL</code> and <code>SUPABASE_KEY</code> near the top.<br/>
+                                3. Paste your credentials from your Supabase Dashboard.<br/>
+                                4. Run the SQL script (provided in the HTML comments) to create the tables.
+                            </p>
+                            <div className="bg-slate-100 p-4 rounded-lg text-xs font-mono text-left mb-4 overflow-x-auto">
+                                const SUPABASE_URL = "INSERT_SUPABASE_URL_HERE";<br/>
+                                const SUPABASE_KEY = "INSERT_SUPABASE_ANON_KEY_HERE";
+                            </div>
+                            <button onClick={() => window.location.reload()} className="w-full bg-blue-600 text-white py-2.5 rounded-xl font-bold hover:bg-blue-700">I have updated the code</button>
+                        </div>
+                    </div>
+                );
+            }
 
             if (connectionStatus === 'error') {
                 return (
@@ -253,25 +442,24 @@
                         <div className="bg-white p-8 rounded-2xl shadow-xl max-w-md w-full text-center border border-rose-100">
                             <div className="w-16 h-16 bg-rose-100 text-rose-500 rounded-full flex items-center justify-center mx-auto mb-4"><WifiOff size={32}/></div>
                             <h2 className="text-xl font-bold text-slate-800 mb-2">Connection Failed</h2>
-                            <p className="text-slate-500 text-sm mb-6">Unable to connect to Firebase. Please check your configuration.</p>
+                            <p className="text-slate-500 text-sm mb-6">Could not connect to Supabase. Check your URL/Key or ensure tables exist.</p>
                             <button onClick={() => window.location.reload()} className="w-full bg-rose-600 text-white py-2.5 rounded-xl font-bold hover:bg-rose-700">Retry</button>
                         </div>
                     </div>
                 );
             }
 
-            if (!user) return <div className="flex h-screen items-center justify-center bg-slate-50 flex-col gap-4"><div className="w-10 h-10 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div><p className="text-slate-500 text-sm font-medium">Connecting...</p></div>;
+            if (loading) return <div className="flex h-screen items-center justify-center bg-slate-50 flex-col gap-4"><div className="w-10 h-10 border-4 border-green-600 border-t-transparent rounded-full animate-spin"></div><p className="text-slate-500 text-sm font-medium">Connecting to Supabase...</p></div>;
 
             return (
                 <div className="flex h-screen bg-slate-50 text-slate-900 font-sans overflow-hidden relative">
                     {notification && <div className="fixed top-4 right-4 z-50 bg-slate-800 text-white px-4 py-3 rounded-xl shadow-lg flex items-center gap-3 animate-in slide-in-from-top-2"><CheckCircle2 size={20} className="text-emerald-400" /><span className="text-sm font-medium">{notification}</span></div>}
-                    <div className="lg:hidden fixed top-0 left-0 right-0 bg-white border-b h-16 flex items-center justify-between px-4 z-30"><div className="flex items-center gap-2 font-bold text-slate-800"><Clock className="text-blue-600" size={20}/> Manhour Pro</div><button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 text-slate-600"><Menu size={24}/></button></div>
+                    <div className="lg:hidden fixed top-0 left-0 right-0 bg-white border-b h-16 flex items-center justify-between px-4 z-30"><div className="flex items-center gap-2 font-bold text-slate-800"><Clock className="text-green-600" size={20}/> Manhour Pro</div><button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 text-slate-600"><Menu size={24}/></button></div>
                     
                     <aside className={`fixed inset-y-0 left-0 bg-slate-900 text-white w-64 p-4 shadow-xl z-40 transform transition-transform duration-300 lg:relative lg:translate-x-0 ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
-                        <div className="hidden lg:flex items-center gap-3 mb-8 px-2"><div className="bg-blue-600 p-2 rounded-lg"><Clock className="w-6 h-6 text-white" /></div><div><h1 className="text-lg font-bold leading-none">Manhour Pro</h1><p className="text-xs text-slate-400 mt-1">Contractor Tracking</p></div></div>
+                        <div className="hidden lg:flex items-center gap-3 mb-8 px-2"><div className="bg-green-600 p-2 rounded-lg"><Clock className="w-6 h-6 text-white" /></div><div><h1 className="text-lg font-bold leading-none">Manhour Pro</h1><p className="text-xs text-slate-400 mt-1">Supabase Edition</p></div></div>
                         <div className="lg:hidden flex justify-end mb-4"><button onClick={() => setIsSidebarOpen(false)} className="p-2 text-slate-400"><X size={24}/></button></div>
                         
-                        {/* Year Selector in Sidebar */}
                         <div className="mb-6 px-2">
                             <label className="text-xs text-slate-400 uppercase font-bold mb-2 block">Fiscal Year</label>
                             <div className="relative">
@@ -279,7 +467,7 @@
                                 <select 
                                     value={selectedYear} 
                                     onChange={(e) => setSelectedYear(e.target.value)} 
-                                    className="w-full bg-slate-800 text-white border border-slate-700 rounded-lg py-2 pl-9 pr-3 text-sm focus:ring-2 ring-blue-500 outline-none appearance-none"
+                                    className="w-full bg-slate-800 text-white border border-slate-700 rounded-lg py-2 pl-9 pr-3 text-sm focus:ring-2 ring-green-500 outline-none appearance-none"
                                 >
                                     {YEARS.map(y => <option key={y} value={y}>{y}</option>)}
                                 </select>
@@ -288,13 +476,13 @@
                         </div>
 
                         <nav className="space-y-1">
-                            <button onClick={() => { setActiveTab('dashboard'); setIsSidebarOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${activeTab === 'dashboard' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800'}`}><LayoutDashboard size={20}/> <span className="font-medium text-sm">Dashboard</span></button>
-                            <button onClick={() => { setActiveTab('projects'); setIsSidebarOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${activeTab === 'projects' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800'}`}><FolderKanban size={20}/> <span className="font-medium text-sm">Projects</span></button>
+                            <button onClick={() => { setActiveTab('dashboard'); setIsSidebarOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${activeTab === 'dashboard' ? 'bg-green-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800'}`}><LayoutDashboard size={20}/> <span className="font-medium text-sm">Dashboard</span></button>
+                            <button onClick={() => { setActiveTab('projects'); setIsSidebarOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${activeTab === 'projects' ? 'bg-green-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800'}`}><FolderKanban size={20}/> <span className="font-medium text-sm">Projects</span></button>
                         </nav>
                         <div className="mt-auto space-y-4">
                             <div className="p-4 bg-slate-800 rounded-xl text-xs text-slate-400 border border-slate-700/50 mb-2">
-                                <p className="font-mono">User: {user.uid.substring(0,4)}...</p>
-                                <p className="mt-1 flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> Online</p>
+                                <p className="font-mono flex items-center gap-2"><Database size={12}/> Supabase</p>
+                                <p className="mt-1 flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> SQL Connected</p>
                             </div>
                         </div>
                     </aside>
@@ -330,11 +518,11 @@
                 <div className="space-y-8 pb-10">
                     <header className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4 bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
                         <div>
-                            <h2 className="text-3xl font-bold text-slate-800">Dashboard <span className="text-blue-600">({year})</span></h2>
+                            <h2 className="text-3xl font-bold text-slate-800">Dashboard <span className="text-green-600">({year})</span></h2>
                             <p className="text-slate-500 mt-1">Data from {projects.length} Projects</p>
                         </div>
                         <div className="flex gap-2">
-                            <div className="relative group"><button className="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2.5 rounded-xl font-medium transition-colors"><Filter size={18} /> Group: {groupFilter} <ChevronDown size={14}/></button><div className="absolute right-0 mt-2 w-48 bg-white rounded-xl shadow-xl border border-slate-100 p-1 hidden group-hover:block z-50 max-h-60 overflow-y-auto">{groups.map(g => (<button key={g} onClick={() => setGroupFilter(g)} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${groupFilter === g ? 'bg-blue-50 text-blue-600 font-bold' : 'hover:bg-slate-50 text-slate-600'}`}>{g}</button>))}</div></div>
+                            <div className="relative group"><button className="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2.5 rounded-xl font-medium transition-colors"><Filter size={18} /> Group: {groupFilter} <ChevronDown size={14}/></button><div className="absolute right-0 mt-2 w-48 bg-white rounded-xl shadow-xl border border-slate-100 p-1 hidden group-hover:block z-50 max-h-60 overflow-y-auto">{groups.map(g => (<button key={g} onClick={() => setGroupFilter(g)} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${groupFilter === g ? 'bg-green-50 text-green-600 font-bold' : 'hover:bg-slate-50 text-slate-600'}`}>{g}</button>))}</div></div>
                             <button onClick={onExport} className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-xl font-bold shadow-lg transition-transform active:scale-95"><FileSpreadsheet size={18} /> Export</button>
                         </div>
                     </header>
@@ -345,7 +533,7 @@
                         <StatCard label="Incidents" value={stats.totalIncidents} unit="Times" icon={<AlertTriangle className="text-rose-600"/>} highlight={stats.totalIncidents > 0} color="rose" />
                     </div>
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100"><h3 className="font-bold text-lg mb-6 flex items-center gap-2"><Users size={20} className="text-blue-500" /> Contractor Type Distribution</h3><div className="space-y-6">{CONTRACTOR_TYPES.map(type => { const val = stats.typeBreakdown[type] || 0; const percentage = stats.totalManhours > 0 ? (val / stats.totalManhours) * 100 : 0; return (<div key={type}><div className="flex justify-between text-sm mb-2"><span className="font-medium text-slate-700">{type}</span><span className="text-slate-500 font-mono">{val.toLocaleString()} Hrs ({percentage.toFixed(1)}%)</span></div><div className="w-full bg-slate-100 h-3 rounded-full overflow-hidden"><div className={`h-full rounded-full transition-all duration-1000 ${type === 'Type A' ? 'bg-blue-500' : type === 'Type B' ? 'bg-emerald-500' : 'bg-orange-500'}`} style={{ width: `${percentage}%` }} /></div></div>); })}</div></div>
+                        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100"><h3 className="font-bold text-lg mb-6 flex items-center gap-2"><Users size={20} className="text-green-500" /> Contractor Type Distribution</h3><div className="space-y-6">{CONTRACTOR_TYPES.map(type => { const val = stats.typeBreakdown[type] || 0; const percentage = stats.totalManhours > 0 ? (val / stats.totalManhours) * 100 : 0; return (<div key={type}><div className="flex justify-between text-sm mb-2"><span className="font-medium text-slate-700">{type}</span><span className="text-slate-500 font-mono">{val.toLocaleString()} Hrs ({percentage.toFixed(1)}%)</span></div><div className="w-full bg-slate-100 h-3 rounded-full overflow-hidden"><div className={`h-full rounded-full transition-all duration-1000 ${type === 'Type A' ? 'bg-blue-500' : type === 'Type B' ? 'bg-emerald-500' : 'bg-orange-500'}`} style={{ width: `${percentage}%` }} /></div></div>); })}</div></div>
                         <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 overflow-hidden flex flex-col"><div className="flex justify-between items-center mb-6"><h3 className="font-bold text-lg flex items-center gap-2"><Calendar size={20} className="text-violet-500" /> Monthly Trend</h3><div className="flex bg-slate-100 p-1 rounded-lg"><button onClick={() => setGenderFilter('all')} className={`px-3 py-1 text-xs font-bold rounded-md transition-all ${genderFilter === 'all' ? 'bg-white shadow text-violet-600' : 'text-slate-400'}`}>All</button><button onClick={() => setGenderFilter('male')} className={`px-3 py-1 text-xs font-bold rounded-md transition-all ${genderFilter === 'male' ? 'bg-white shadow text-blue-600' : 'text-slate-400'}`}>Male</button><button onClick={() => setGenderFilter('female')} className={`px-3 py-1 text-xs font-bold rounded-md transition-all ${genderFilter === 'female' ? 'bg-white shadow text-pink-600' : 'text-slate-400'}`}>Female</button></div></div><div className="flex items-end h-56 gap-2 pt-8 pb-2 flex-1">{stats.monthlyStats.map((stat, idx) => { const values = stats.monthlyStats.map(s => genderFilter === 'all' ? s.total : (genderFilter === 'male' ? s.male : s.female)); const max = Math.max(...values, 1); const val = genderFilter === 'all' ? stat.total : (genderFilter === 'male' ? stat.male : stat.female); const singleH = (val / max) * 100; return (<div key={idx} className="flex-1 flex flex-col items-center group relative h-full justify-end"><div className="w-full relative rounded-t-md overflow-hidden flex flex-col-reverse transition-all duration-500" style={{ height: genderFilter === 'all' ? `${(stat.total/max)*100}%` : `${singleH}%` }}>{genderFilter === 'all' ? (<><div className="w-full bg-blue-400 hover:bg-blue-500 transition-colors" style={{ height: `${(stat.male/stat.total)*100}%` }}></div><div className="w-full bg-pink-400 hover:bg-pink-500 transition-colors" style={{ height: `${(stat.female/stat.total)*100}%` }}></div></>) : (<div className={`w-full transition-colors ${genderFilter === 'male' ? 'bg-blue-500 hover:bg-blue-600' : 'bg-pink-500 hover:bg-pink-600'}`} style={{ height: '100%' }}></div>)}<div className="opacity-0 group-hover:opacity-100 absolute -top-12 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-[10px] px-2 py-1.5 rounded shadow-xl whitespace-nowrap z-10 transition-opacity pointer-events-none"><div className="font-bold mb-0.5">{stat.month}</div>{genderFilter === 'all' && <div>Total: {stat.total.toLocaleString()}</div>}{(genderFilter === 'all' || genderFilter === 'male') && <div className="text-blue-200">M: {stat.male.toLocaleString()}</div>}{(genderFilter === 'all' || genderFilter === 'female') && <div className="text-pink-200">F: {stat.female.toLocaleString()}</div>}</div></div><span className="text-[9px] text-slate-400 mt-2 -rotate-45 origin-top-left whitespace-nowrap absolute -bottom-6 left-1">{MONTHS[idx].substring(0, 3)}</span></div>); })}</div></div>
                     </div>
                 </div>
@@ -362,12 +550,12 @@
             const handleSaveEdit = () => { onUpdate(editingId, { name: editName, group: editGroup }); setEditingId(null); };
             return (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden flex flex-col h-[calc(100vh-140px)] sticky top-4">
-                    <div className="p-4 border-b border-slate-100 space-y-3 bg-white z-10"><div className="flex justify-between items-center"><h3 className="font-bold text-slate-800">Projects ({projects.length})</h3><button onClick={() => setIsAdding(!isAdding)} className="p-2 hover:bg-blue-50 rounded-lg text-blue-600"><Plus size={20} /></button></div>{!isAdding && <div className="relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} /><input type="text" placeholder="Search..." className="w-full text-sm pl-9 pr-3 py-2.5 rounded-xl border bg-slate-50 outline-none focus:ring-2 focus:ring-blue-100" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} /></div>}</div>
-                    {isAdding && <form onSubmit={handleSubmit} className="p-4 bg-blue-50/50 border-b border-blue-100 space-y-3"><input type="text" placeholder="Project Name" className="w-full text-sm px-3 py-2 rounded-lg border" value={newName} onChange={e => setNewName(e.target.value)} required /><input type="text" placeholder="Group" className="w-full text-sm px-3 py-2 rounded-lg border" value={newGroup} onChange={e => setNewGroup(e.target.value)} /><div className="flex gap-2"><button type="submit" className="flex-1 bg-blue-600 text-white py-2 rounded-lg text-sm font-bold">Save</button><button type="button" onClick={() => setIsAdding(false)} className="flex-1 border bg-white py-2 rounded-lg text-sm">Cancel</button></div></form>}
+                    <div className="p-4 border-b border-slate-100 space-y-3 bg-white z-10"><div className="flex justify-between items-center"><h3 className="font-bold text-slate-800">Projects ({projects.length})</h3><button onClick={() => setIsAdding(!isAdding)} className="p-2 hover:bg-green-50 rounded-lg text-green-600"><Plus size={20} /></button></div>{!isAdding && <div className="relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} /><input type="text" placeholder="Search..." className="w-full text-sm pl-9 pr-3 py-2.5 rounded-xl border bg-slate-50 outline-none focus:ring-2 focus:ring-green-100" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} /></div>}</div>
+                    {isAdding && <form onSubmit={handleSubmit} className="p-4 bg-green-50/50 border-b border-green-100 space-y-3"><input type="text" placeholder="Project Name" className="w-full text-sm px-3 py-2 rounded-lg border" value={newName} onChange={e => setNewName(e.target.value)} required /><input type="text" placeholder="Group" className="w-full text-sm px-3 py-2 rounded-lg border" value={newGroup} onChange={e => setNewGroup(e.target.value)} /><div className="flex gap-2"><button type="submit" className="flex-1 bg-green-600 text-white py-2 rounded-lg text-sm font-bold">Save</button><button type="button" onClick={() => setIsAdding(false)} className="flex-1 border bg-white py-2 rounded-lg text-sm">Cancel</button></div></form>}
                     <div className="flex-1 overflow-y-auto divide-y divide-slate-50">
                         {filtered.map(p => (
-                            <div key={p.id} onClick={() => onSelect(p)} className={`group flex items-center justify-between p-4 cursor-pointer border-l-4 ${selectedId === p.id ? 'bg-blue-50 border-blue-600' : 'hover:bg-slate-50 border-transparent'}`}>
-                                {editingId === p.id ? (<div className="flex-1 min-w-0 mr-2 space-y-2"><input type="text" className="w-full text-sm border rounded px-2 py-1" value={editName} onChange={e => setEditName(e.target.value)} onClick={e => e.stopPropagation()} /><input type="text" className="w-full text-xs border rounded px-2 py-1" value={editGroup} onChange={e => setEditGroup(e.target.value)} onClick={e => e.stopPropagation()} /><div className="flex gap-2"><button onClick={(e) => { e.stopPropagation(); handleSaveEdit(); }} className="text-xs bg-emerald-500 text-white px-2 py-1 rounded">Save</button><button onClick={(e) => { e.stopPropagation(); setEditingId(null); }} className="text-xs bg-slate-200 px-2 py-1 rounded">Cancel</button></div></div>) : (<><div className="flex-1 min-w-0"><p className={`font-bold text-sm truncate ${selectedId === p.id ? 'text-blue-700' : 'text-slate-700'}`}>{p.name}</p><p className="text-[10px] text-slate-400 uppercase mt-1 bg-slate-100 w-fit px-1.5 py-0.5 rounded">{p.group || 'General'}</p></div><div className="flex opacity-0 group-hover:opacity-100 transition-opacity"><button onClick={(e) => { e.stopPropagation(); setEditingId(p.id); setEditName(p.name); setEditGroup(p.group); }} className="p-2 text-slate-300 hover:text-blue-500"><Edit2 size={16} /></button><button onClick={(e) => { e.stopPropagation(); onDelete(p.id); }} className="p-2 text-slate-300 hover:text-rose-500"><Trash2 size={16} /></button></div></>)}
+                            <div key={p.id} onClick={() => onSelect(p)} className={`group flex items-center justify-between p-4 cursor-pointer border-l-4 ${selectedId === p.id ? 'bg-green-50 border-green-600' : 'hover:bg-slate-50 border-transparent'}`}>
+                                {editingId === p.id ? (<div className="flex-1 min-w-0 mr-2 space-y-2"><input type="text" className="w-full text-sm border rounded px-2 py-1" value={editName} onChange={e => setEditName(e.target.value)} onClick={e => e.stopPropagation()} /><input type="text" className="w-full text-xs border rounded px-2 py-1" value={editGroup} onChange={e => setEditGroup(e.target.value)} onClick={e => e.stopPropagation()} /><div className="flex gap-2"><button onClick={(e) => { e.stopPropagation(); handleSaveEdit(); }} className="text-xs bg-emerald-500 text-white px-2 py-1 rounded">Save</button><button onClick={(e) => { e.stopPropagation(); setEditingId(null); }} className="text-xs bg-slate-200 px-2 py-1 rounded">Cancel</button></div></div>) : (<><div className="flex-1 min-w-0"><p className={`font-bold text-sm truncate ${selectedId === p.id ? 'text-green-700' : 'text-slate-700'}`}>{p.name}</p><p className="text-[10px] text-slate-400 uppercase mt-1 bg-slate-100 w-fit px-1.5 py-0.5 rounded">{p.group || 'General'}</p></div><div className="flex opacity-0 group-hover:opacity-100 transition-opacity"><button onClick={(e) => { e.stopPropagation(); setEditingId(p.id); setEditName(p.name); setEditGroup(p.group); }} className="p-2 text-slate-300 hover:text-green-500"><Edit2 size={16} /></button><button onClick={(e) => { e.stopPropagation(); onDelete(p.id); }} className="p-2 text-slate-300 hover:text-rose-500"><Trash2 size={16} /></button></div></>)}
                             </div>
                         ))}
                     </div>
@@ -379,7 +567,7 @@
             const handleCopyLink = () => { const url = window.location.href; navigator.clipboard.writeText(url).then(() => { showNotification("Link copied to clipboard!"); }); };
             return (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden flex flex-col h-full">
-                    <div className="p-6 bg-slate-900 text-white shadow-md z-10"><div className="flex justify-between items-center"><div><h3 className="text-2xl font-bold">{project.name}</h3><div className="flex gap-2 mt-1"><span className="text-xs font-bold bg-slate-700 px-2 py-0.5 rounded text-slate-300 uppercase inline-block">{project.group}</span><span className="text-xs font-bold bg-blue-700 px-2 py-0.5 rounded text-blue-100 uppercase inline-block">{year}</span></div></div><div className="flex items-center gap-2"><button onClick={handleCopyLink} className="p-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white" title="Copy Link"><Share2 size={18} /></button><div className="flex bg-slate-800 p-1 rounded-xl"><button onClick={() => setView('manhours')} className={`px-4 py-2 rounded-lg text-sm font-medium ${view === 'manhours' ? 'bg-blue-600 text-white' : 'text-slate-400'}`}>Man-hours</button><button onClick={() => setView('safety')} className={`px-4 py-2 rounded-lg text-sm font-medium ${view === 'safety' ? 'bg-rose-600 text-white' : 'text-slate-400'}`}>Safety ({incidents.length})</button></div></div></div></div>
+                    <div className="p-6 bg-slate-900 text-white shadow-md z-10"><div className="flex justify-between items-center"><div><h3 className="text-2xl font-bold">{project.name}</h3><div className="flex gap-2 mt-1"><span className="text-xs font-bold bg-slate-700 px-2 py-0.5 rounded text-slate-300 uppercase inline-block">{project.group}</span><span className="text-xs font-bold bg-green-700 px-2 py-0.5 rounded text-green-100 uppercase inline-block">{year}</span></div></div><div className="flex items-center gap-2"><button onClick={handleCopyLink} className="p-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white" title="Copy Link"><Share2 size={18} /></button><div className="flex bg-slate-800 p-1 rounded-xl"><button onClick={() => setView('manhours')} className={`px-4 py-2 rounded-lg text-sm font-medium ${view === 'manhours' ? 'bg-green-600 text-white' : 'text-slate-400'}`}>Man-hours</button><button onClick={() => setView('safety')} className={`px-4 py-2 rounded-lg text-sm font-medium ${view === 'safety' ? 'bg-rose-600 text-white' : 'text-slate-400'}`}>Safety ({incidents.length})</button></div></div></div></div>
                     <div className="flex-1 overflow-y-auto p-6">{view === 'manhours' ? <ManhourTable project={project} logs={logs} onSave={onSaveLog} /> : <SafetyView project={project} incidents={incidents} onAdd={onAddIncident} onUpdate={onUpdateIncident} onDelete={onDeleteIncident} />}</div>
                 </div>
             );
@@ -388,7 +576,7 @@
             const [editing, setEditing] = useState(null);
             return (
                 <div className="space-y-4">
-                    <div className="flex items-center gap-2 text-sm text-slate-500 bg-slate-50 p-3 rounded-lg border border-slate-100"><Clock size={16} className="text-blue-500"/><span>Edit monthly data and click save.</span></div>
+                    <div className="flex items-center gap-2 text-sm text-slate-500 bg-slate-50 p-3 rounded-lg border border-slate-100"><Clock size={16} className="text-green-500"/><span>Edit monthly data and click save.</span></div>
                     <div className="overflow-x-auto border rounded-xl border-slate-100">
                         <table className="w-full text-sm"><thead className="bg-slate-50 text-slate-500 font-semibold border-b"><tr><th className="py-4 px-4 text-left">Month</th><th className="py-4 px-4 text-left">Type</th><th className="py-4 px-4 text-center text-blue-600">Male</th><th className="py-4 px-4 text-center text-pink-600">Female</th><th className="py-4 px-4 text-center">Hrs/Person</th><th className="py-4 px-6 text-right bg-slate-100/50">Total</th><th className="py-4 px-4 text-center">Actions</th></tr></thead><tbody className="divide-y divide-slate-50">{MONTHS.map(month => CONTRACTOR_TYPES.map((type, idx) => { const log = logs.find(l => l.month === month && l.type === type) || {}; return <EditableRow key={`${month}-${type}`} month={month} type={type} data={log} isEditing={editing?.month === month && editing?.type === type} isFirst={idx === 0} onEdit={() => setEditing({month, type})} onCancel={() => setEditing(null)} onSave={(d) => { onSave({...d, projectId: project.id, month, type}); setEditing(null); }} />; }))}</tbody></table>
                     </div>
@@ -399,7 +587,7 @@
             const [form, setForm] = useState({ male: data.male || 0, female: data.female || 0, hours: data.hours || 0 });
             useEffect(() => { if (!isEditing) setForm({ male: data.male || 0, female: data.female || 0, hours: data.hours || 0 }); }, [data, isEditing]);
             const total = (Number(form.male) + Number(form.female)) * Number(form.hours);
-            return <tr className={`${isEditing ? 'bg-blue-50/60' : 'hover:bg-slate-50'} ${isFirst ? 'border-t-4 border-t-slate-100' : ''}`}><td className="py-4 px-4 font-medium text-slate-700">{isFirst ? month : ''}</td><td className="py-4 px-4"><span className="px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider bg-slate-100 text-slate-600">{type}</span></td><td className="py-4 px-4 text-center">{isEditing ? <input type="number" className="w-16 border rounded text-center" value={form.male} onChange={e => setForm({...form, male: e.target.value})} /> : (data.male > 0 ? data.male : '-')}</td><td className="py-4 px-4 text-center">{isEditing ? <input type="number" className="w-16 border rounded text-center" value={form.female} onChange={e => setForm({...form, female: e.target.value})} /> : (data.female > 0 ? data.female : '-')}</td><td className="py-4 px-4 text-center">{isEditing ? <input type="number" className="w-16 border rounded text-center" value={form.hours} onChange={e => setForm({...form, hours: e.target.value})} /> : (data.hours > 0 ? data.hours : '-')}</td><td className="py-4 px-6 text-right font-bold bg-slate-50/50">{total > 0 ? total.toLocaleString() : '-'}</td><td className="py-4 px-4 text-center">{isEditing ? <div className="flex justify-center gap-1"><button onClick={() => onSave(form)} className="p-1.5 bg-emerald-500 text-white rounded"><Save size={14}/></button><button onClick={onCancel} className="p-1.5 bg-white border rounded"><X size={14}/></button></div> : <button onClick={onEdit} className="p-1.5 text-slate-400 hover:bg-slate-100 rounded"><Edit2 size={14}/></button>}</td></tr>;
+            return <tr className={`${isEditing ? 'bg-green-50/60' : 'hover:bg-slate-50'} ${isFirst ? 'border-t-4 border-t-slate-100' : ''}`}><td className="py-4 px-4 font-medium text-slate-700">{isFirst ? month : ''}</td><td className="py-4 px-4"><span className="px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider bg-slate-100 text-slate-600">{type}</span></td><td className="py-4 px-4 text-center">{isEditing ? <input type="number" className="w-16 border rounded text-center" value={form.male} onChange={e => setForm({...form, male: e.target.value})} /> : (data.male > 0 ? data.male : '-')}</td><td className="py-4 px-4 text-center">{isEditing ? <input type="number" className="w-16 border rounded text-center" value={form.female} onChange={e => setForm({...form, female: e.target.value})} /> : (data.female > 0 ? data.female : '-')}</td><td className="py-4 px-4 text-center">{isEditing ? <input type="number" className="w-16 border rounded text-center" value={form.hours} onChange={e => setForm({...form, hours: e.target.value})} /> : (data.hours > 0 ? data.hours : '-')}</td><td className="py-4 px-6 text-right font-bold bg-slate-50/50">{total > 0 ? total.toLocaleString() : '-'}</td><td className="py-4 px-4 text-center">{isEditing ? <div className="flex justify-center gap-1"><button onClick={() => onSave(form)} className="p-1.5 bg-emerald-500 text-white rounded"><Save size={14}/></button><button onClick={onCancel} className="p-1.5 bg-white border rounded"><X size={14}/></button></div> : <button onClick={onEdit} className="p-1.5 text-slate-400 hover:bg-slate-100 rounded"><Edit2 size={14}/></button>}</td></tr>;
         }
         function SafetyView({ project, incidents, onAdd, onUpdate, onDelete }) {
             const [editingId, setEditingId] = useState(null); 
