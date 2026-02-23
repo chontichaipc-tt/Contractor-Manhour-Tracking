@@ -39,12 +39,6 @@
 <body class="bg-slate-50 text-slate-900 overflow-hidden">
     <div id="root"></div>
 
-    <!-- 
-      Note: Database Setup
-      Please run the commands in 'setup.sql' in your Supabase SQL Editor 
-      to create the necessary tables and policies.
-    -->
-
     <script type="text/babel" data-type="module">
         import React, { useState, useEffect, useMemo, useRef } from 'react';
         import { createRoot } from 'react-dom/client';
@@ -62,7 +56,8 @@
 
         let supabase = null;
         try {
-            if (SUPABASE_URL !== "https://ylkwmutevwaydcmcybvz.supabase.co") {
+            // แก้ไขเงื่อนไขตรงนี้: ให้เช็คแค่ว่ามีค่าหรือไม่ก็พอ
+            if (SUPABASE_URL && SUPABASE_KEY) {
                 supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
             }
         } catch (e) {
@@ -74,10 +69,9 @@
         const YEARS = ['FY2024', 'FY2025', 'FY2026', 'FY2027', 'FY2028'];
 
         function App() {
-            const [user, setUser] = useState(null); // Simple user state
+            const [user, setUser] = useState(null); 
             const [activeTab, setActiveTab] = useState('dashboard');
             
-            // Data States
             const [projects, setProjects] = useState([]);
             const [logs, setLogs] = useState([]);
             const [incidents, setIncidents] = useState([]);
@@ -88,67 +82,89 @@
             const [isSidebarOpen, setIsSidebarOpen] = useState(false);
             const [groupFilter, setGroupFilter] = useState('All');
             const [selectedYear, setSelectedYear] = useState('FY2026');
-            const [connectionStatus, setConnectionStatus] = useState('checking'); // checking, connected, error, unconfigured
+            
+            const [connectionStatus, setConnectionStatus] = useState('checking'); 
+            const [errorMessage, setErrorMessage] = useState('');
 
-            // --- 1. Check Configuration & Auth ---
             useEffect(() => {
                 if (!supabase) {
+                    setErrorMessage("ไม่พบการตั้งค่า Supabase Client กรุณาตรวจสอบ URL และ Key");
                     setConnectionStatus('unconfigured');
                     return;
                 }
                 
                 const checkConnection = async () => {
                     setLoading(true);
-                    // Try a simple fetch to check connection
-                    const { count, error } = await supabase.from('projects').select('*', { count: 'exact', head: true });
-                    if (error) {
-                        console.error("Connection Check Failed:", error);
+                    try {
+                        const { error } = await supabase.auth.getSession();
+                        
+                        if (error && error.message !== 'Auth session missing!') {
+                            console.error("Connection Check Failed:", error);
+                            setErrorMessage(error.message || JSON.stringify(error));
+                            setConnectionStatus('error');
+                        } else {
+                            setConnectionStatus('connected');
+                            fetchData();
+                        }
+                    } catch (err) {
+                        console.error("Unexpected connection error:", err);
+                        setErrorMessage(err.message || "เกิดข้อผิดพลาดที่ไม่ทราบสาเหตุขณะตรวจสอบการเชื่อมต่อ");
                         setConnectionStatus('error');
-                    } else {
-                        setConnectionStatus('connected');
-                        fetchData();
+                    } finally {
+                        setLoading(false);
+                        setUser({ id: 'anon-user' });
                     }
-                    setLoading(false);
-                    setUser({ id: 'anon-user' }); // Mock user for UI
                 };
 
                 checkConnection();
             }, []);
 
-            // --- 2. Data Fetching (Manual Refresh Style for Simplicity) ---
             const fetchData = async () => {
                 if (!supabase) return;
                 
-                // Fetch Projects
-                const { data: pData } = await supabase.from('projects').select('*').order('created_at', { ascending: false });
-                if (pData) setProjects(pData);
+                try {
+                    const { data: pData, error: pError } = await supabase.from('projects').select('*').order('created_at', { ascending: false });
+                    
+                    if (pError) {
+                        console.error("Error fetching projects:", pError);
+                         if(pError.code === "42P01") {
+                             setErrorMessage("ยังไม่ได้สร้างตารางข้อมูล! กรุณานำโค้ด setup.sql ไปรันในหน้า SQL Editor ของ Supabase");
+                             setConnectionStatus('unconfigured');
+                             return;
+                         }
+                    } else if (pData) {
+                         setProjects(pData);
+                    }
 
-                // Fetch Logs (Wait for Project IDs ideally, but fetching all for now for dashboard)
-                const { data: lData } = await supabase.from('work_logs').select('*');
-                if (lData) {
-                    // Normalize fields (postgres returns snake_case usually, but we keep simple names)
-                    const normalizedLogs = lData.map(l => ({
-                        ...l,
-                        projectId: l.project_id // Map DB column project_id to internal projectId
-                    }));
-                    setLogs(normalizedLogs);
-                }
+                    const { data: lData, error: lError } = await supabase.from('work_logs').select('*');
+                    if(lError) {
+                         console.error("Error fetching logs:", lError);
+                    } else if (lData) {
+                        const normalizedLogs = lData.map(l => ({
+                            ...l,
+                            projectId: l.project_id 
+                        }));
+                        setLogs(normalizedLogs);
+                    }
 
-                // Fetch Incidents
-                const { data: iData } = await supabase.from('incidents').select('*');
-                if (iData) {
-                    const normalizedIncidents = iData.map(i => ({
-                        ...i,
-                        projectId: i.project_id,
-                        injuredMale: Number(i.injured_male),
-                        injuredFemale: Number(i.injured_female),
-                        lostDays: Number(i.lost_days)
-                    }));
-                    setIncidents(normalizedIncidents);
+                    const { data: iData, error: iError } = await supabase.from('incidents').select('*');
+                    if(iError) {
+                        console.error("Error fetching incidents:", iError);
+                    } else if (iData) {
+                        const normalizedIncidents = iData.map(i => ({
+                            ...i,
+                            projectId: i.project_id,
+                            injuredMale: Number(i.injured_male),
+                            injuredFemale: Number(i.injured_female),
+                            lostDays: Number(i.lost_days)
+                        }));
+                        setIncidents(normalizedIncidents);
+                    }
+                } catch (err) {
+                    console.error("Fetch data exception:", err);
                 }
             };
 
-            // --- Deep Linking ---
             useEffect(() => {
                 if (loading || projects.length === 0) return;
                 const params = new URLSearchParams(window.location.search);
@@ -200,17 +216,16 @@
                 return summary;
             }, [filteredData]);
 
-            // --- Actions (Supabase CRUD) ---
             const addProject = async (name, group) => { 
                 if (!name || !supabase) return; 
                 try {
                     const { data, error } = await supabase.from('projects').insert([{ name, group }]).select();
                     if (error) throw error;
-                    setProjects(prev => [data[0], ...prev]);
-                    showNotification("Project added");
+                    if(data) setProjects(prev => [data[0], ...prev]);
+                    showNotification("เพิ่มโปรเจกต์สำเร็จ");
                 } catch(e) {
                     console.error(e);
-                    showNotification("Error adding project");
+                    showNotification("เกิดข้อผิดพลาดในการเพิ่มโปรเจกต์");
                 }
             };
             
@@ -222,25 +237,25 @@
                     
                     setProjects(prev => prev.map(p => p.id === id ? { ...p, ...newData } : p));
                     if (selectedProject?.id === id) setSelectedProject(prev => ({ ...prev, ...newData }));
-                    showNotification("Project updated");
+                    showNotification("อัปเดตโปรเจกต์สำเร็จ");
                 } catch(e) {
                     console.error(e);
-                    showNotification("Error updating");
+                    showNotification("เกิดข้อผิดพลาดในการอัปเดต");
                 }
             };
             
             const deleteProject = async (id) => { 
                 if (!supabase) return;
-                if(!confirm("Delete project and all its data?")) return;
+                if(!confirm("ต้องการลบโปรเจกต์และข้อมูลทั้งหมดที่เกี่ยวข้องใช่หรือไม่?")) return;
                 try {
                     const { error } = await supabase.from('projects').delete().eq('id', id);
                     if (error) throw error;
                     
                     setProjects(prev => prev.filter(p => p.id !== id));
                     if (selectedProject?.id === id) { setSelectedProject(null); } 
-                    showNotification("Project deleted"); 
+                    showNotification("ลบโปรเจกต์สำเร็จ"); 
                 } catch(e) {
-                    showNotification("Error deleting");
+                    showNotification("เกิดข้อผิดพลาดในการลบ");
                 }
             };
             
@@ -248,8 +263,6 @@
                 if (!supabase) return;
                 
                 try {
-                    // Check if exists first (Supabase UPSERT requires constraint)
-                    // For simplicity, we'll try to select first
                     const { data: existing } = await supabase.from('work_logs')
                         .select('id')
                         .eq('project_id', d.projectId)
@@ -273,7 +286,6 @@
                     if (existing) {
                         const res = await supabase.from('work_logs').update(payload).eq('id', existing.id).select();
                         error = res.error;
-                        // Update local state
                         setLogs(prev => prev.map(l => l.id === existing.id ? { ...l, ...payload, projectId: d.projectId } : l));
                     } else {
                         const res = await supabase.from('work_logs').insert([payload]).select();
@@ -282,10 +294,10 @@
                     }
 
                     if (error) throw error;
-                    showNotification("Saved"); 
+                    showNotification("บันทึกสำเร็จ"); 
                 } catch(e) {
                     console.error(e);
-                    showNotification("Error saving log");
+                    showNotification("เกิดข้อผิดพลาดในการบันทึก");
                 }
             };
             
@@ -304,12 +316,14 @@
                     const { data, error } = await supabase.from('incidents').insert([payload]).select();
                     if (error) throw error;
                     
-                    const newInc = { ...data[0], projectId: pid, injuredMale: payload.injured_male, injuredFemale: payload.injured_female, lostDays: payload.lost_days };
-                    setIncidents(prev => [newInc, ...prev]);
-                    showNotification("Incident recorded"); 
+                    if(data) {
+                        const newInc = { ...data[0], projectId: pid, injuredMale: payload.injured_male, injuredFemale: payload.injured_female, lostDays: payload.lost_days };
+                        setIncidents(prev => [newInc, ...prev]);
+                    }
+                    showNotification("บันทึกอุบัติเหตุสำเร็จ"); 
                 } catch(e) {
                     console.error(e);
-                    showNotification("Error adding incident");
+                    showNotification("เกิดข้อผิดพลาดในการบันทึกอุบัติเหตุ");
                 }
             };
             
@@ -328,22 +342,22 @@
                     if (error) throw error;
                     
                     setIncidents(prev => prev.map(i => i.id === id ? { ...i, ...payload, injuredMale: payload.injured_male, injuredFemale: payload.injured_female, lostDays: payload.lost_days } : i));
-                    showNotification("Incident updated"); 
+                    showNotification("อัปเดตข้อมูลอุบัติเหตุสำเร็จ"); 
                 } catch(e) {
-                    showNotification("Error updating");
+                    showNotification("เกิดข้อผิดพลาดในการอัปเดต");
                 }
             };
             
             const deleteIncident = async (id) => { 
                 if (!supabase) return;
-                if(!confirm("Delete?")) return; 
+                if(!confirm("ต้องการลบใช่หรือไม่?")) return; 
                 try {
                     const { error } = await supabase.from('incidents').delete().eq('id', id);
                     if (error) throw error;
                     setIncidents(prev => prev.filter(i => i.id !== id));
-                    showNotification("Deleted"); 
+                    showNotification("ลบสำเร็จ"); 
                 } catch(e) {
-                    showNotification("Error deleting");
+                    showNotification("เกิดข้อผิดพลาดในการลบ");
                 }
             };
 
@@ -375,16 +389,27 @@
                      <div className="flex h-screen items-center justify-center bg-slate-50 p-6">
                         <div className="bg-white p-8 rounded-2xl shadow-xl max-w-lg w-full text-center border border-blue-100">
                             <div className="w-16 h-16 bg-blue-100 text-blue-500 rounded-full flex items-center justify-center mx-auto mb-4"><Database size={32}/></div>
-                            <h2 className="text-xl font-bold text-slate-800 mb-2">Setup Supabase</h2>
+                            <h2 className="text-xl font-bold text-slate-800 mb-2">ตั้งค่าระบบฐานข้อมูล</h2>
                             <p className="text-slate-500 text-sm mb-6 text-left">
-                                To use this app with Supabase, you need to:
-                                <br/><br/>
-                                1. Open the <code>setup.sql</code> file provided.<br/>
-                                2. Copy the SQL commands.<br/>
-                                3. Go to your Supabase Dashboard -> SQL Editor.<br/>
-                                4. Paste and Run the commands to create tables and policies.
+                                โปรดตรวจสอบข้อมูลต่อไปนี้ในโค้ด <code>index.html</code> ของคุณ:
                             </p>
-                            <button onClick={() => window.location.reload()} className="w-full bg-blue-600 text-white py-2.5 rounded-xl font-bold hover:bg-blue-700">I have run the SQL</button>
+                             {errorMessage && (
+                                <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl text-sm mb-4 text-left leading-relaxed">
+                                    {errorMessage}
+                                </div>
+                            )}
+                            <div className="text-left text-sm text-slate-600 mb-6 bg-slate-50 p-4 rounded-xl border border-slate-100">
+                                <strong>วิธีหาคีย์ที่ถูกต้อง:</strong>
+                                <ol className="list-decimal pl-5 mt-2 space-y-1">
+                                    <li>ไปที่เว็บ <b>Supabase</b></li>
+                                    <li>เลือกโปรเจกต์ของคุณ</li>
+                                    <li>ไปที่เมนู <b>Project Settings</b> (รูปฟันเฟืองด้านซ้ายล่าง)</li>
+                                    <li>เลือก <b>API</b> เมนูทางซ้าย</li>
+                                    <li>ไปที่หัวข้อ <b>Project API keys</b></li>
+                                    <li>คัดลอกคีย์ที่มีป้ายกำกับว่า <b><span className="bg-slate-200 px-1 rounded">anon</span> <span className="bg-slate-200 px-1 rounded">public</span></b> (คีย์นี้จะยาวมากและขึ้นต้นด้วย <code>eyJ...</code>)</li>
+                                </ol>
+                            </div>
+                            <button onClick={() => window.location.reload()} className="w-full bg-blue-600 text-white py-2.5 rounded-xl font-bold hover:bg-blue-700">โหลดหน้าเว็บใหม่เพื่อตรวจสอบอีกครั้ง</button>
                         </div>
                     </div>
                 );
@@ -395,15 +420,23 @@
                     <div className="flex h-screen items-center justify-center bg-rose-50 p-6">
                         <div className="bg-white p-8 rounded-2xl shadow-xl max-w-md w-full text-center border border-rose-100">
                             <div className="w-16 h-16 bg-rose-100 text-rose-500 rounded-full flex items-center justify-center mx-auto mb-4"><WifiOff size={32}/></div>
-                            <h2 className="text-xl font-bold text-slate-800 mb-2">Connection Failed</h2>
-                            <p className="text-slate-500 text-sm mb-6">Could not connect to Supabase. Check your URL/Key or ensure tables exist.</p>
-                            <button onClick={() => window.location.reload()} className="w-full bg-rose-600 text-white py-2.5 rounded-xl font-bold hover:bg-rose-700">Retry</button>
+                            <h2 className="text-xl font-bold text-slate-800 mb-2">การเชื่อมต่อล้มเหลว</h2>
+                            <p className="text-slate-500 text-sm mb-4">ระบบไม่สามารถเชื่อมต่อกับฐานข้อมูล Supabase ได้</p>
+                            
+                            <div className="bg-rose-50 border border-rose-200 p-3 rounded-lg text-left mb-6">
+                                <p className="text-xs text-rose-700 font-mono break-words">
+                                    <span className="font-bold">รายละเอียดข้อผิดพลาด:</span><br/>
+                                    {errorMessage || "ไม่พบรายละเอียดเพิ่มเติม"}
+                                </p>
+                            </div>
+
+                            <button onClick={() => window.location.reload()} className="w-full bg-rose-600 text-white py-2.5 rounded-xl font-bold hover:bg-rose-700">ลองใหม่อีกครั้ง</button>
                         </div>
                     </div>
                 );
             }
 
-            if (loading) return <div className="flex h-screen items-center justify-center bg-slate-50 flex-col gap-4"><div className="w-10 h-10 border-4 border-green-600 border-t-transparent rounded-full animate-spin"></div><p className="text-slate-500 text-sm font-medium">Connecting to Supabase...</p></div>;
+            if (loading) return <div className="flex h-screen items-center justify-center bg-slate-50 flex-col gap-4"><div className="w-10 h-10 border-4 border-green-600 border-t-transparent rounded-full animate-spin"></div><p className="text-slate-500 text-sm font-medium">กำลังตรวจสอบการเชื่อมต่อ...</p></div>;
 
             return (
                 <div className="flex h-screen bg-slate-50 text-slate-900 font-sans overflow-hidden relative">
@@ -415,7 +448,7 @@
                         <div className="lg:hidden flex justify-end mb-4"><button onClick={() => setIsSidebarOpen(false)} className="p-2 text-slate-400"><X size={24}/></button></div>
                         
                         <div className="mb-6 px-2">
-                            <label className="text-xs text-slate-400 uppercase font-bold mb-2 block">Fiscal Year</label>
+                            <label className="text-xs text-slate-400 uppercase font-bold mb-2 block">ปีงบประมาณ</label>
                             <div className="relative">
                                 <CalendarRange size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"/>
                                 <select 
@@ -430,13 +463,13 @@
                         </div>
 
                         <nav className="space-y-1">
-                            <button onClick={() => { setActiveTab('dashboard'); setIsSidebarOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${activeTab === 'dashboard' ? 'bg-green-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800'}`}><LayoutDashboard size={20}/> <span className="font-medium text-sm">Dashboard</span></button>
-                            <button onClick={() => { setActiveTab('projects'); setIsSidebarOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${activeTab === 'projects' ? 'bg-green-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800'}`}><FolderKanban size={20}/> <span className="font-medium text-sm">Projects</span></button>
+                            <button onClick={() => { setActiveTab('dashboard'); setIsSidebarOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${activeTab === 'dashboard' ? 'bg-green-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800'}`}><LayoutDashboard size={20}/> <span className="font-medium text-sm">หน้าหลัก</span></button>
+                            <button onClick={() => { setActiveTab('projects'); setIsSidebarOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${activeTab === 'projects' ? 'bg-green-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800'}`}><FolderKanban size={20}/> <span className="font-medium text-sm">โปรเจกต์</span></button>
                         </nav>
                         <div className="mt-auto space-y-4">
                             <div className="p-4 bg-slate-800 rounded-xl text-xs text-slate-400 border border-slate-700/50 mb-2">
                                 <p className="font-mono flex items-center gap-2"><Database size={12}/> Supabase</p>
-                                <p className="mt-1 flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> SQL Connected</p>
+                                <p className="mt-1 flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> เชื่อมต่อ SQL แล้ว</p>
                             </div>
                         </div>
                     </aside>
@@ -452,11 +485,11 @@
                                 <div className={`lg:col-span-8 h-full flex flex-col ${!selectedProject && window.innerWidth < 1024 ? 'hidden' : ''}`}>
                                     {selectedProject ? (
                                         <div className="h-full flex flex-col">
-                                            <button onClick={() => setSelectedProject(null)} className="lg:hidden mb-2 flex items-center gap-2 text-slate-500 font-bold"><ChevronRight className="rotate-180" size={16}/> Back to List</button>
+                                            <button onClick={() => setSelectedProject(null)} className="lg:hidden mb-2 flex items-center gap-2 text-slate-500 font-bold"><ChevronRight className="rotate-180" size={16}/> กลับไปหน้ารายการ</button>
                                             <ProjectDetails project={selectedProject} logs={filteredData.logs.filter(l => l.projectId === selectedProject.id)} onSaveLog={saveLog} incidents={incidents.filter(i => i.projectId === selectedProject.id)} onAddIncident={addIncident} onUpdateIncident={updateIncident} onDeleteIncident={deleteIncident} showNotification={showNotification} year={selectedYear} />
                                         </div>
                                     ) : (
-                                        <div className="h-full hidden lg:flex flex-col items-center justify-center border-2 border-dashed border-slate-200 rounded-2xl bg-white/50 p-12 text-center"><FolderKanban size={32} className="mb-4 text-slate-400" /><h3 className="text-lg font-bold text-slate-700">Select a project</h3></div>
+                                        <div className="h-full hidden lg:flex flex-col items-center justify-center border-2 border-dashed border-slate-200 rounded-2xl bg-white/50 p-12 text-center"><FolderKanban size={32} className="mb-4 text-slate-400" /><h3 className="text-lg font-bold text-slate-700">เลือกโปรเจกต์</h3></div>
                                     )}
                                 </div>
                             </div>
@@ -472,23 +505,23 @@
                 <div className="space-y-8 pb-10">
                     <header className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4 bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
                         <div>
-                            <h2 className="text-3xl font-bold text-slate-800">Dashboard <span className="text-green-600">({year})</span></h2>
-                            <p className="text-slate-500 mt-1">Data from {projects.length} Projects</p>
+                            <h2 className="text-3xl font-bold text-slate-800">หน้าหลัก <span className="text-green-600">({year})</span></h2>
+                            <p className="text-slate-500 mt-1">ข้อมูลจาก {projects.length} โปรเจกต์</p>
                         </div>
                         <div className="flex gap-2">
-                            <div className="relative group"><button className="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2.5 rounded-xl font-medium transition-colors"><Filter size={18} /> Group: {groupFilter} <ChevronDown size={14}/></button><div className="absolute right-0 mt-2 w-48 bg-white rounded-xl shadow-xl border border-slate-100 p-1 hidden group-hover:block z-50 max-h-60 overflow-y-auto">{groups.map(g => (<button key={g} onClick={() => setGroupFilter(g)} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${groupFilter === g ? 'bg-green-50 text-green-600 font-bold' : 'hover:bg-slate-50 text-slate-600'}`}>{g}</button>))}</div></div>
-                            <button onClick={onExport} className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-xl font-bold shadow-lg transition-transform active:scale-95"><FileSpreadsheet size={18} /> Export</button>
+                            <div className="relative group"><button className="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2.5 rounded-xl font-medium transition-colors"><Filter size={18} /> กลุ่ม: {groupFilter} <ChevronDown size={14}/></button><div className="absolute right-0 mt-2 w-48 bg-white rounded-xl shadow-xl border border-slate-100 p-1 hidden group-hover:block z-50 max-h-60 overflow-y-auto">{groups.map(g => (<button key={g} onClick={() => setGroupFilter(g)} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${groupFilter === g ? 'bg-green-50 text-green-600 font-bold' : 'hover:bg-slate-50 text-slate-600'}`}>{g}</button>))}</div></div>
+                            <button onClick={onExport} className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-xl font-bold shadow-lg transition-transform active:scale-95"><FileSpreadsheet size={18} /> ส่งออกข้อมูล</button>
                         </div>
                     </header>
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                        <StatCard label="Total Man-hours" value={stats.totalManhours.toLocaleString()} unit="Hrs." icon={<Clock className="text-emerald-600"/>} color="emerald" />
-                        <StatCard label="Male Workers" value={stats.totalMale.toLocaleString()} unit="Persons" icon={<Users className="text-blue-600"/>} color="blue" />
-                        <StatCard label="Female Workers" value={stats.totalFemale.toLocaleString()} unit="Persons" icon={<Users className="text-pink-600"/>} color="pink" />
-                        <StatCard label="Incidents" value={stats.totalIncidents} unit="Times" icon={<AlertTriangle className="text-rose-600"/>} highlight={stats.totalIncidents > 0} color="rose" />
+                        <StatCard label="ชั่วโมงการทำงานรวม" value={stats.totalManhours.toLocaleString()} unit="ชม." icon={<Clock className="text-emerald-600"/>} color="emerald" />
+                        <StatCard label="คนงานชาย" value={stats.totalMale.toLocaleString()} unit="คน" icon={<Users className="text-blue-600"/>} color="blue" />
+                        <StatCard label="คนงานหญิง" value={stats.totalFemale.toLocaleString()} unit="คน" icon={<Users className="text-pink-600"/>} color="pink" />
+                        <StatCard label="อุบัติเหตุ" value={stats.totalIncidents} unit="ครั้ง" icon={<AlertTriangle className="text-rose-600"/>} highlight={stats.totalIncidents > 0} color="rose" />
                     </div>
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100"><h3 className="font-bold text-lg mb-6 flex items-center gap-2"><Users size={20} className="text-green-500" /> Contractor Type Distribution</h3><div className="space-y-6">{CONTRACTOR_TYPES.map(type => { const val = stats.typeBreakdown[type] || 0; const percentage = stats.totalManhours > 0 ? (val / stats.totalManhours) * 100 : 0; return (<div key={type}><div className="flex justify-between text-sm mb-2"><span className="font-medium text-slate-700">{type}</span><span className="text-slate-500 font-mono">{val.toLocaleString()} Hrs ({percentage.toFixed(1)}%)</span></div><div className="w-full bg-slate-100 h-3 rounded-full overflow-hidden"><div className={`h-full rounded-full transition-all duration-1000 ${type === 'Type A' ? 'bg-blue-500' : type === 'Type B' ? 'bg-emerald-500' : 'bg-orange-500'}`} style={{ width: `${percentage}%` }} /></div></div>); })}</div></div>
-                        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 overflow-hidden flex flex-col"><div className="flex justify-between items-center mb-6"><h3 className="font-bold text-lg flex items-center gap-2"><Calendar size={20} className="text-violet-500" /> Monthly Trend</h3><div className="flex bg-slate-100 p-1 rounded-lg"><button onClick={() => setGenderFilter('all')} className={`px-3 py-1 text-xs font-bold rounded-md transition-all ${genderFilter === 'all' ? 'bg-white shadow text-violet-600' : 'text-slate-400'}`}>All</button><button onClick={() => setGenderFilter('male')} className={`px-3 py-1 text-xs font-bold rounded-md transition-all ${genderFilter === 'male' ? 'bg-white shadow text-blue-600' : 'text-slate-400'}`}>Male</button><button onClick={() => setGenderFilter('female')} className={`px-3 py-1 text-xs font-bold rounded-md transition-all ${genderFilter === 'female' ? 'bg-white shadow text-pink-600' : 'text-slate-400'}`}>Female</button></div></div><div className="flex items-end h-56 gap-2 pt-8 pb-2 flex-1">{stats.monthlyStats.map((stat, idx) => { const values = stats.monthlyStats.map(s => genderFilter === 'all' ? s.total : (genderFilter === 'male' ? s.male : s.female)); const max = Math.max(...values, 1); const val = genderFilter === 'all' ? stat.total : (genderFilter === 'male' ? stat.male : stat.female); const singleH = (val / max) * 100; return (<div key={idx} className="flex-1 flex flex-col items-center group relative h-full justify-end"><div className="w-full relative rounded-t-md overflow-hidden flex flex-col-reverse transition-all duration-500" style={{ height: genderFilter === 'all' ? `${(stat.total/max)*100}%` : `${singleH}%` }}>{genderFilter === 'all' ? (<><div className="w-full bg-blue-400 hover:bg-blue-500 transition-colors" style={{ height: `${(stat.male/stat.total)*100}%` }}></div><div className="w-full bg-pink-400 hover:bg-pink-500 transition-colors" style={{ height: `${(stat.female/stat.total)*100}%` }}></div></>) : (<div className={`w-full transition-colors ${genderFilter === 'male' ? 'bg-blue-500 hover:bg-blue-600' : 'bg-pink-500 hover:bg-pink-600'}`} style={{ height: '100%' }}></div>)}<div className="opacity-0 group-hover:opacity-100 absolute -top-12 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-[10px] px-2 py-1.5 rounded shadow-xl whitespace-nowrap z-10 transition-opacity pointer-events-none"><div className="font-bold mb-0.5">{stat.month}</div>{genderFilter === 'all' && <div>Total: {stat.total.toLocaleString()}</div>}{(genderFilter === 'all' || genderFilter === 'male') && <div className="text-blue-200">M: {stat.male.toLocaleString()}</div>}{(genderFilter === 'all' || genderFilter === 'female') && <div className="text-pink-200">F: {stat.female.toLocaleString()}</div>}</div></div><span className="text-[9px] text-slate-400 mt-2 -rotate-45 origin-top-left whitespace-nowrap absolute -bottom-6 left-1">{MONTHS[idx].substring(0, 3)}</span></div>); })}</div></div>
+                        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100"><h3 className="font-bold text-lg mb-6 flex items-center gap-2"><Users size={20} className="text-green-500" /> สัดส่วนประเภทผู้รับเหมา</h3><div className="space-y-6">{CONTRACTOR_TYPES.map(type => { const val = stats.typeBreakdown[type] || 0; const percentage = stats.totalManhours > 0 ? (val / stats.totalManhours) * 100 : 0; return (<div key={type}><div className="flex justify-between text-sm mb-2"><span className="font-medium text-slate-700">{type}</span><span className="text-slate-500 font-mono">{val.toLocaleString()} ชม. ({percentage.toFixed(1)}%)</span></div><div className="w-full bg-slate-100 h-3 rounded-full overflow-hidden"><div className={`h-full rounded-full transition-all duration-1000 ${type === 'Type A' ? 'bg-blue-500' : type === 'Type B' ? 'bg-emerald-500' : 'bg-orange-500'}`} style={{ width: `${percentage}%` }} /></div></div>); })}</div></div>
+                        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 overflow-hidden flex flex-col"><div className="flex justify-between items-center mb-6"><h3 className="font-bold text-lg flex items-center gap-2"><Calendar size={20} className="text-violet-500" /> แนวโน้มรายเดือน</h3><div className="flex bg-slate-100 p-1 rounded-lg"><button onClick={() => setGenderFilter('all')} className={`px-3 py-1 text-xs font-bold rounded-md transition-all ${genderFilter === 'all' ? 'bg-white shadow text-violet-600' : 'text-slate-400'}`}>ทั้งหมด</button><button onClick={() => setGenderFilter('male')} className={`px-3 py-1 text-xs font-bold rounded-md transition-all ${genderFilter === 'male' ? 'bg-white shadow text-blue-600' : 'text-slate-400'}`}>ชาย</button><button onClick={() => setGenderFilter('female')} className={`px-3 py-1 text-xs font-bold rounded-md transition-all ${genderFilter === 'female' ? 'bg-white shadow text-pink-600' : 'text-slate-400'}`}>หญิง</button></div></div><div className="flex items-end h-56 gap-2 pt-8 pb-2 flex-1">{stats.monthlyStats.map((stat, idx) => { const values = stats.monthlyStats.map(s => genderFilter === 'all' ? s.total : (genderFilter === 'male' ? s.male : s.female)); const max = Math.max(...values, 1); const val = genderFilter === 'all' ? stat.total : (genderFilter === 'male' ? stat.male : stat.female); const singleH = (val / max) * 100; return (<div key={idx} className="flex-1 flex flex-col items-center group relative h-full justify-end"><div className="w-full relative rounded-t-md overflow-hidden flex flex-col-reverse transition-all duration-500" style={{ height: genderFilter === 'all' ? `${(stat.total/max)*100}%` : `${singleH}%` }}>{genderFilter === 'all' ? (<><div className="w-full bg-blue-400 hover:bg-blue-500 transition-colors" style={{ height: `${(stat.male/stat.total)*100}%` }}></div><div className="w-full bg-pink-400 hover:bg-pink-500 transition-colors" style={{ height: `${(stat.female/stat.total)*100}%` }}></div></>) : (<div className={`w-full transition-colors ${genderFilter === 'male' ? 'bg-blue-500 hover:bg-blue-600' : 'bg-pink-500 hover:bg-pink-600'}`} style={{ height: '100%' }}></div>)}<div className="opacity-0 group-hover:opacity-100 absolute -top-12 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-[10px] px-2 py-1.5 rounded shadow-xl whitespace-nowrap z-10 transition-opacity pointer-events-none"><div className="font-bold mb-0.5">{stat.month}</div>{genderFilter === 'all' && <div>รวม: {stat.total.toLocaleString()}</div>}{(genderFilter === 'all' || genderFilter === 'male') && <div className="text-blue-200">ช: {stat.male.toLocaleString()}</div>}{(genderFilter === 'all' || genderFilter === 'female') && <div className="text-pink-200">ญ: {stat.female.toLocaleString()}</div>}</div></div><span className="text-[9px] text-slate-400 mt-2 -rotate-45 origin-top-left whitespace-nowrap absolute -bottom-6 left-1">{MONTHS[idx].substring(0, 3)}</span></div>); })}</div></div>
                     </div>
                 </div>
             );
@@ -504,12 +537,12 @@
             const handleSaveEdit = () => { onUpdate(editingId, { name: editName, group: editGroup }); setEditingId(null); };
             return (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden flex flex-col h-[calc(100vh-140px)] sticky top-4">
-                    <div className="p-4 border-b border-slate-100 space-y-3 bg-white z-10"><div className="flex justify-between items-center"><h3 className="font-bold text-slate-800">Projects ({projects.length})</h3><button onClick={() => setIsAdding(!isAdding)} className="p-2 hover:bg-green-50 rounded-lg text-green-600"><Plus size={20} /></button></div>{!isAdding && <div className="relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} /><input type="text" placeholder="Search..." className="w-full text-sm pl-9 pr-3 py-2.5 rounded-xl border bg-slate-50 outline-none focus:ring-2 focus:ring-green-100" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} /></div>}</div>
-                    {isAdding && <form onSubmit={handleSubmit} className="p-4 bg-green-50/50 border-b border-green-100 space-y-3"><input type="text" placeholder="Project Name" className="w-full text-sm px-3 py-2 rounded-lg border" value={newName} onChange={e => setNewName(e.target.value)} required /><input type="text" placeholder="Group" className="w-full text-sm px-3 py-2 rounded-lg border" value={newGroup} onChange={e => setNewGroup(e.target.value)} /><div className="flex gap-2"><button type="submit" className="flex-1 bg-green-600 text-white py-2 rounded-lg text-sm font-bold">Save</button><button type="button" onClick={() => setIsAdding(false)} className="flex-1 border bg-white py-2 rounded-lg text-sm">Cancel</button></div></form>}
+                    <div className="p-4 border-b border-slate-100 space-y-3 bg-white z-10"><div className="flex justify-between items-center"><h3 className="font-bold text-slate-800">โปรเจกต์ ({projects.length})</h3><button onClick={() => setIsAdding(!isAdding)} className="p-2 hover:bg-green-50 rounded-lg text-green-600"><Plus size={20} /></button></div>{!isAdding && <div className="relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} /><input type="text" placeholder="ค้นหา..." className="w-full text-sm pl-9 pr-3 py-2.5 rounded-xl border bg-slate-50 outline-none focus:ring-2 focus:ring-green-100" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} /></div>}</div>
+                    {isAdding && <form onSubmit={handleSubmit} className="p-4 bg-green-50/50 border-b border-green-100 space-y-3"><input type="text" placeholder="ชื่อโปรเจกต์" className="w-full text-sm px-3 py-2 rounded-lg border" value={newName} onChange={e => setNewName(e.target.value)} required /><input type="text" placeholder="กลุ่ม" className="w-full text-sm px-3 py-2 rounded-lg border" value={newGroup} onChange={e => setNewGroup(e.target.value)} /><div className="flex gap-2"><button type="submit" className="flex-1 bg-green-600 text-white py-2 rounded-lg text-sm font-bold">บันทึก</button><button type="button" onClick={() => setIsAdding(false)} className="flex-1 border bg-white py-2 rounded-lg text-sm">ยกเลิก</button></div></form>}
                     <div className="flex-1 overflow-y-auto divide-y divide-slate-50">
                         {filtered.map(p => (
                             <div key={p.id} onClick={() => onSelect(p)} className={`group flex items-center justify-between p-4 cursor-pointer border-l-4 ${selectedId === p.id ? 'bg-green-50 border-green-600' : 'hover:bg-slate-50 border-transparent'}`}>
-                                {editingId === p.id ? (<div className="flex-1 min-w-0 mr-2 space-y-2"><input type="text" className="w-full text-sm border rounded px-2 py-1" value={editName} onChange={e => setEditName(e.target.value)} onClick={e => e.stopPropagation()} /><input type="text" className="w-full text-xs border rounded px-2 py-1" value={editGroup} onChange={e => setEditGroup(e.target.value)} onClick={e => e.stopPropagation()} /><div className="flex gap-2"><button onClick={(e) => { e.stopPropagation(); handleSaveEdit(); }} className="text-xs bg-emerald-500 text-white px-2 py-1 rounded">Save</button><button onClick={(e) => { e.stopPropagation(); setEditingId(null); }} className="text-xs bg-slate-200 px-2 py-1 rounded">Cancel</button></div></div>) : (<><div className="flex-1 min-w-0"><p className={`font-bold text-sm truncate ${selectedId === p.id ? 'text-green-700' : 'text-slate-700'}`}>{p.name}</p><p className="text-[10px] text-slate-400 uppercase mt-1 bg-slate-100 w-fit px-1.5 py-0.5 rounded">{p.group || 'General'}</p></div><div className="flex opacity-0 group-hover:opacity-100 transition-opacity"><button onClick={(e) => { e.stopPropagation(); setEditingId(p.id); setEditName(p.name); setEditGroup(p.group); }} className="p-2 text-slate-300 hover:text-green-500"><Edit2 size={16} /></button><button onClick={(e) => { e.stopPropagation(); onDelete(p.id); }} className="p-2 text-slate-300 hover:text-rose-500"><Trash2 size={16} /></button></div></>)}
+                                {editingId === p.id ? (<div className="flex-1 min-w-0 mr-2 space-y-2"><input type="text" className="w-full text-sm border rounded px-2 py-1" value={editName} onChange={e => setEditName(e.target.value)} onClick={e => e.stopPropagation()} /><input type="text" className="w-full text-xs border rounded px-2 py-1" value={editGroup} onChange={e => setEditGroup(e.target.value)} onClick={e => e.stopPropagation()} /><div className="flex gap-2"><button onClick={(e) => { e.stopPropagation(); handleSaveEdit(); }} className="text-xs bg-emerald-500 text-white px-2 py-1 rounded">บันทึก</button><button onClick={(e) => { e.stopPropagation(); setEditingId(null); }} className="text-xs bg-slate-200 px-2 py-1 rounded">ยกเลิก</button></div></div>) : (<><div className="flex-1 min-w-0"><p className={`font-bold text-sm truncate ${selectedId === p.id ? 'text-green-700' : 'text-slate-700'}`}>{p.name}</p><p className="text-[10px] text-slate-400 uppercase mt-1 bg-slate-100 w-fit px-1.5 py-0.5 rounded">{p.group || 'ทั่วไป'}</p></div><div className="flex opacity-0 group-hover:opacity-100 transition-opacity"><button onClick={(e) => { e.stopPropagation(); setEditingId(p.id); setEditName(p.name); setEditGroup(p.group); }} className="p-2 text-slate-300 hover:text-green-500"><Edit2 size={16} /></button><button onClick={(e) => { e.stopPropagation(); onDelete(p.id); }} className="p-2 text-slate-300 hover:text-rose-500"><Trash2 size={16} /></button></div></>)}
                             </div>
                         ))}
                     </div>
@@ -518,10 +551,10 @@
         }
         function ProjectDetails({ project, logs, onSaveLog, incidents, onAddIncident, onUpdateIncident, onDeleteIncident, showNotification, year }) {
             const [view, setView] = useState('manhours');
-            const handleCopyLink = () => { const url = window.location.href; navigator.clipboard.writeText(url).then(() => { showNotification("Link copied to clipboard!"); }); };
+            const handleCopyLink = () => { const url = window.location.href; navigator.clipboard.writeText(url).then(() => { showNotification("คัดลอกลิงก์เรียบร้อยแล้ว!"); }); };
             return (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden flex flex-col h-full">
-                    <div className="p-6 bg-slate-900 text-white shadow-md z-10"><div className="flex justify-between items-center"><div><h3 className="text-2xl font-bold">{project.name}</h3><div className="flex gap-2 mt-1"><span className="text-xs font-bold bg-slate-700 px-2 py-0.5 rounded text-slate-300 uppercase inline-block">{project.group}</span><span className="text-xs font-bold bg-green-700 px-2 py-0.5 rounded text-green-100 uppercase inline-block">{year}</span></div></div><div className="flex items-center gap-2"><button onClick={handleCopyLink} className="p-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white" title="Copy Link"><Share2 size={18} /></button><div className="flex bg-slate-800 p-1 rounded-xl"><button onClick={() => setView('manhours')} className={`px-4 py-2 rounded-lg text-sm font-medium ${view === 'manhours' ? 'bg-green-600 text-white' : 'text-slate-400'}`}>Man-hours</button><button onClick={() => setView('safety')} className={`px-4 py-2 rounded-lg text-sm font-medium ${view === 'safety' ? 'bg-rose-600 text-white' : 'text-slate-400'}`}>Safety ({incidents.length})</button></div></div></div></div>
+                    <div className="p-6 bg-slate-900 text-white shadow-md z-10"><div className="flex justify-between items-center"><div><h3 className="text-2xl font-bold">{project.name}</h3><div className="flex gap-2 mt-1"><span className="text-xs font-bold bg-slate-700 px-2 py-0.5 rounded text-slate-300 uppercase inline-block">{project.group}</span><span className="text-xs font-bold bg-green-700 px-2 py-0.5 rounded text-green-100 uppercase inline-block">{year}</span></div></div><div className="flex items-center gap-2"><button onClick={handleCopyLink} className="p-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white" title="คัดลอกลิงก์"><Share2 size={18} /></button><div className="flex bg-slate-800 p-1 rounded-xl"><button onClick={() => setView('manhours')} className={`px-4 py-2 rounded-lg text-sm font-medium ${view === 'manhours' ? 'bg-green-600 text-white' : 'text-slate-400'}`}>ชั่วโมงการทำงาน</button><button onClick={() => setView('safety')} className={`px-4 py-2 rounded-lg text-sm font-medium ${view === 'safety' ? 'bg-rose-600 text-white' : 'text-slate-400'}`}>ความปลอดภัย ({incidents.length})</button></div></div></div></div>
                     <div className="flex-1 overflow-y-auto p-6">{view === 'manhours' ? <ManhourTable project={project} logs={logs} onSave={onSaveLog} /> : <SafetyView project={project} incidents={incidents} onAdd={onAddIncident} onUpdate={onUpdateIncident} onDelete={onDeleteIncident} />}</div>
                 </div>
             );
@@ -530,9 +563,9 @@
             const [editing, setEditing] = useState(null);
             return (
                 <div className="space-y-4">
-                    <div className="flex items-center gap-2 text-sm text-slate-500 bg-slate-50 p-3 rounded-lg border border-slate-100"><Clock size={16} className="text-green-500"/><span>Edit monthly data and click save.</span></div>
+                    <div className="flex items-center gap-2 text-sm text-slate-500 bg-slate-50 p-3 rounded-lg border border-slate-100"><Clock size={16} className="text-green-500"/><span>แก้ไขข้อมูลรายเดือนแล้วกดบันทึก</span></div>
                     <div className="overflow-x-auto border rounded-xl border-slate-100">
-                        <table className="w-full text-sm"><thead className="bg-slate-50 text-slate-500 font-semibold border-b"><tr><th className="py-4 px-4 text-left">Month</th><th className="py-4 px-4 text-left">Type</th><th className="py-4 px-4 text-center text-blue-600">Male</th><th className="py-4 px-4 text-center text-pink-600">Female</th><th className="py-4 px-4 text-center">Hrs/Person</th><th className="py-4 px-6 text-right bg-slate-100/50">Total</th><th className="py-4 px-4 text-center">Actions</th></tr></thead><tbody className="divide-y divide-slate-50">{MONTHS.map(month => CONTRACTOR_TYPES.map((type, idx) => { const log = logs.find(l => l.month === month && l.type === type) || {}; return <EditableRow key={`${month}-${type}`} month={month} type={type} data={log} isEditing={editing?.month === month && editing?.type === type} isFirst={idx === 0} onEdit={() => setEditing({month, type})} onCancel={() => setEditing(null)} onSave={(d) => { onSave({...d, projectId: project.id, month, type}); setEditing(null); }} />; }))}</tbody></table>
+                        <table className="w-full text-sm"><thead className="bg-slate-50 text-slate-500 font-semibold border-b"><tr><th className="py-4 px-4 text-left">เดือน</th><th className="py-4 px-4 text-left">ประเภท</th><th className="py-4 px-4 text-center text-blue-600">ชาย</th><th className="py-4 px-4 text-center text-pink-600">หญิง</th><th className="py-4 px-4 text-center">ชม./คน</th><th className="py-4 px-6 text-right bg-slate-100/50">รวม</th><th className="py-4 px-4 text-center">จัดการ</th></tr></thead><tbody className="divide-y divide-slate-50">{MONTHS.map(month => CONTRACTOR_TYPES.map((type, idx) => { const log = logs.find(l => l.month === month && l.type === type) || {}; return <EditableRow key={`${month}-${type}`} month={month} type={type} data={log} isEditing={editing?.month === month && editing?.type === type} isFirst={idx === 0} onEdit={() => setEditing({month, type})} onCancel={() => setEditing(null)} onSave={(d) => { onSave({...d, projectId: project.id, month, type}); setEditing(null); }} />; }))}</tbody></table>
                     </div>
                 </div>
             );
@@ -553,7 +586,7 @@
             const [lostDays, setLostDays] = useState(0);
             const fileRef = useRef(null);
 
-            const handleImage = (e) => { const file = e.target.files[0]; if (file) { if (file.size > 1024*1024) return alert("Max 1MB"); const r = new FileReader(); r.onloadend = () => setImage(r.result); r.readAsDataURL(file); } };
+            const handleImage = (e) => { const file = e.target.files[0]; if (file) { if (file.size > 1024*1024) return alert("ขนาดไฟล์สูงสุด 1MB"); const r = new FileReader(); r.onloadend = () => setImage(r.result); r.readAsDataURL(file); } };
             
             const handleSubmit = (e) => { 
                 e.preventDefault(); 
@@ -577,37 +610,37 @@
             return (
                 <div className="max-w-4xl mx-auto space-y-8">
                     <div className={`p-8 rounded-2xl border shadow-sm ${editingId ? 'bg-amber-50 border-amber-200' : 'bg-rose-50 border-rose-100'}`}>
-                        <h4 className={`font-bold mb-6 flex items-center gap-2 text-lg ${editingId ? 'text-amber-700' : 'text-rose-700'}`}>{editingId ? 'Edit Incident' : 'Log New Incident'}</h4>
+                        <h4 className={`font-bold mb-6 flex items-center gap-2 text-lg ${editingId ? 'text-amber-700' : 'text-rose-700'}`}>{editingId ? 'แก้ไขข้อมูลอุบัติเหตุ' : 'บันทึกอุบัติเหตุใหม่'}</h4>
                         <form onSubmit={handleSubmit} className="space-y-6">
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                                <div><label className="block text-xs font-bold mb-2 uppercase">Date</label><input type="date" className="w-full px-4 py-2.5 rounded-xl border" value={date} onChange={e => setDate(e.target.value)} required /></div>
-                                <div className="col-span-2"><label className="block text-xs font-bold mb-2 uppercase">Description</label><input type="text" className="w-full px-4 py-2.5 rounded-xl border" value={desc} onChange={e => setDesc(e.target.value)} required /></div>
+                                <div><label className="block text-xs font-bold mb-2 uppercase">วันที่</label><input type="date" className="w-full px-4 py-2.5 rounded-xl border" value={date} onChange={e => setDate(e.target.value)} required /></div>
+                                <div className="col-span-2"><label className="block text-xs font-bold mb-2 uppercase">รายละเอียด</label><input type="text" className="w-full px-4 py-2.5 rounded-xl border" value={desc} onChange={e => setDesc(e.target.value)} required /></div>
                             </div>
                             
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-2 border-t border-rose-200/50">
                                 <div>
-                                    <label className="block text-xs font-bold mb-2 uppercase text-blue-600">Injured (Male)</label>
+                                    <label className="block text-xs font-bold mb-2 uppercase text-blue-600">ผู้บาดเจ็บ (ชาย)</label>
                                     <input type="number" min="0" className="w-full px-4 py-2.5 rounded-xl border" value={injuredMale} onChange={e => setInjuredMale(e.target.value)} />
                                 </div>
                                 <div>
-                                    <label className="block text-xs font-bold mb-2 uppercase text-pink-600">Injured (Female)</label>
+                                    <label className="block text-xs font-bold mb-2 uppercase text-pink-600">ผู้บาดเจ็บ (หญิง)</label>
                                     <input type="number" min="0" className="w-full px-4 py-2.5 rounded-xl border" value={injuredFemale} onChange={e => setInjuredFemale(e.target.value)} />
                                 </div>
                                 <div>
-                                    <label className="block text-xs font-bold mb-2 uppercase text-rose-600">Lost Workdays</label>
+                                    <label className="block text-xs font-bold mb-2 uppercase text-rose-600">วันหยุดงาน</label>
                                     <input type="number" min="0" className="w-full px-4 py-2.5 rounded-xl border" value={lostDays} onChange={e => setLostDays(e.target.value)} />
                                 </div>
                             </div>
 
                             <div>
-                                <label className="block text-xs font-bold mb-2 uppercase">Photo</label>
-                                <div className="flex items-center gap-4 p-4 border-2 border-dashed bg-white/50 rounded-xl"><button type="button" onClick={() => fileRef.current.click()} className="flex items-center gap-2 px-4 py-2 bg-white border rounded-lg text-sm font-bold"><ImageIcon size={18}/> {image ? 'Change' : 'Select'}</button><input type="file" ref={fileRef} className="hidden" accept="image/*" onChange={handleImage} />{image && <img src={image} className="h-20 w-20 object-cover rounded-lg border shadow-sm" alt="Preview"/>}</div>
+                                <label className="block text-xs font-bold mb-2 uppercase">รูปภาพ</label>
+                                <div className="flex items-center gap-4 p-4 border-2 border-dashed bg-white/50 rounded-xl"><button type="button" onClick={() => fileRef.current.click()} className="flex items-center gap-2 px-4 py-2 bg-white border rounded-lg text-sm font-bold"><ImageIcon size={18}/> {image ? 'เปลี่ยน' : 'เลือก'}</button><input type="file" ref={fileRef} className="hidden" accept="image/*" onChange={handleImage} />{image && <img src={image} className="h-20 w-20 object-cover rounded-lg border shadow-sm" alt="Preview"/>}</div>
                             </div>
-                            <div className="flex gap-3"><button type="submit" className={`flex-1 text-white font-bold py-3 rounded-xl shadow-lg ${editingId ? 'bg-amber-600' : 'bg-rose-600'}`}>Save</button>{editingId && <button type="button" onClick={cancelEdit} className="px-6 py-3 rounded-xl border bg-white font-bold">Cancel</button>}</div>
+                            <div className="flex gap-3"><button type="submit" className={`flex-1 text-white font-bold py-3 rounded-xl shadow-lg ${editingId ? 'bg-amber-600' : 'bg-rose-600'}`}>บันทึก</button>{editingId && <button type="button" onClick={cancelEdit} className="px-6 py-3 rounded-xl border bg-white font-bold">ยกเลิก</button>}</div>
                         </form>
                     </div>
                     <div className="space-y-4">
-                        {incidents.length === 0 ? <div className="text-center py-16 border-2 border-dashed rounded-2xl text-slate-300">No incidents recorded.</div> : incidents.sort((a,b) => new Date(b.date) - new Date(a.date)).map(inc => (
+                        {incidents.length === 0 ? <div className="text-center py-16 border-2 border-dashed rounded-2xl text-slate-300">ยังไม่มีข้อมูลอุบัติเหตุ</div> : incidents.sort((a,b) => new Date(b.date) - new Date(a.date)).map(inc => (
                             <div key={inc.id} className="flex flex-col md:flex-row gap-6 p-6 bg-white border rounded-2xl shadow-sm group">
                                 <div className="w-full md:w-32 h-32 flex-shrink-0 bg-slate-50 rounded-xl border flex items-center justify-center overflow-hidden">{inc.image ? <img src={inc.image} className="w-full h-full object-cover"/> : <ImageIcon size={24} className="text-slate-300"/>}</div>
                                 <div className="flex-1">
@@ -622,16 +655,16 @@
                                         {(inc.injuredMale > 0 || inc.injuredFemale > 0) && (
                                             <div className="flex items-center gap-2 text-xs font-semibold text-slate-600 bg-slate-100 px-2 py-1 rounded">
                                                 <Activity size={14} className="text-rose-500"/>
-                                                Injured: {inc.injuredMale > 0 && <span className="text-blue-600">{inc.injuredMale}M</span>} {inc.injuredFemale > 0 && <span className="text-pink-600">{inc.injuredFemale}F</span>}
+                                                บาดเจ็บ: {inc.injuredMale > 0 && <span className="text-blue-600">{inc.injuredMale} ชาย</span>} {inc.injuredFemale > 0 && <span className="text-pink-600">{inc.injuredFemale} หญิง</span>}
                                             </div>
                                         )}
                                         {inc.lostDays > 0 && (
                                             <div className="flex items-center gap-2 text-xs font-semibold text-slate-600 bg-slate-100 px-2 py-1 rounded">
                                                 <AlertCircle size={14} className="text-amber-500"/>
-                                                Lost Time: {inc.lostDays} Days
+                                                หยุดงาน: {inc.lostDays} วัน
                                             </div>
                                         )}
-                                        {(!inc.injuredMale && !inc.injuredFemale && !inc.lostDays) && <span className="text-xs text-slate-400 italic">No injuries reported</span>}
+                                        {(!inc.injuredMale && !inc.injuredFemale && !inc.lostDays) && <span className="text-xs text-slate-400 italic">ไม่มีรายงานผู้บาดเจ็บ</span>}
                                     </div>
                                 </div>
                             </div>
